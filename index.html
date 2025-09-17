@@ -393,6 +393,256 @@
       return user ? React.createElement(Dashboard, { user }) : React.createElement(SignIn);
     }
 
+    function WorkersPanel({
+      openWorkers,
+      onToggleOpen,
+      projectId,
+      workers,
+      onOpenAddWorker,
+      editingRate,
+      editRates,
+      onRateChange,
+      onSaveWorkerRate,
+      onCancelEditRate,
+      onStartEditRate,
+      assignedIds,
+      onToggleAssign,
+      onDeleteWorker
+    }){
+      return React.createElement('section',{className:'bg-white rounded-2xl border shadow-sm'},
+        React.createElement('div',{
+          className:'px-4 py-3 border-b flex items-center gap-3 cursor-pointer select-none',
+          onClick:onToggleOpen,
+          role:'button',
+          'aria-expanded': openWorkers,
+          'aria-controls': 'workers-panel'
+        },
+          React.createElement('h2',{className:'font-semibold'},'Ouvriers'),
+          React.createElement('div',{className:'ml-auto text-xs text-gray-500'},
+            `${workers.length} ouvrier(s)`),
+          React.createElement('button',{
+            type:'button',
+            onClick:(e)=>{ e.stopPropagation(); onOpenAddWorker(); },
+            className:'ml-3 btn'
+          }, 'Ajouter'),
+          React.createElement('span',{className:'text-gray-400','aria-hidden':'true'},
+            openWorkers ? '▾' : '▸')
+        ),
+        openWorkers && React.createElement('div',{id:'workers-panel',className:'p-4'},
+          !projectId ? React.createElement('div',{className:'text-sm text-gray-500'},
+            'Sélectionnez un chantier pour gérer les affectations.')
+          : workers.length ? React.createElement('ul',{className:'text-sm divide-y'},
+              workers.map(w => React.createElement('li',{key:w.id,className:'py-2 flex items-center gap-3'},
+                React.createElement('div',{className:'min-w-0 flex-1'},
+                  React.createElement('div',{className:'font-medium truncate'},
+                    w.full_name || w.email || w.id.slice(0,8)
+                  ),
+                  w.email ? React.createElement('div',{className:'text-xs text-gray-500 truncate'}, w.email) : null
+                ),
+                React.createElement('div',{className:'flex items-center gap-2'},
+                  (editingRate === w.id)
+                  ? React.createElement(React.Fragment, null,
+                      React.createElement('input',{
+                        className:'w-24 px-2 py-1 rounded-lg border text-right',
+                        autoFocus:true,
+                        value:(editRates[w.id] ?? '').toString(),
+                        onChange:(e)=>onRateChange(w.id, e.target.value),
+                        onKeyDown:(e)=>{
+                          if(e.key === 'Enter'){
+                            e.preventDefault();
+                            onSaveWorkerRate(w.id);
+                          } else if(e.key === 'Escape'){
+                            onCancelEditRate();
+                          }
+                        }
+                      }),
+                      React.createElement('span',null,'€/h'),
+                      React.createElement('button',{
+                        className:'px-2 py-1 rounded-lg border hover:bg-gray-50',
+                        onClick:()=>onSaveWorkerRate(w.id),
+                        'aria-label':'Valider'
+                      }, '✓'),
+                      React.createElement('button',{
+                        className:'px-2 py-1 rounded-lg border hover:bg-gray-50',
+                        onClick:onCancelEditRate,
+                        'aria-label':'Annuler'
+                      }, '✖')
+                    )
+                  : React.createElement('button',{
+                      className:'px-2 py-1 rounded-lg border bg-white hover:bg-gray-50 whitespace-nowrap',
+                      onClick:()=>onStartEditRate(w),
+                      'aria-label':`Modifier le taux de ${w.full_name || w.email}`
+                    }, `${toNum(w.pay_rate).toFixed(2)} €/h`),
+                  React.createElement('label',{className:'ml-2 flex items-center gap-2'},
+                    React.createElement('input',{
+                      type:'checkbox',
+                      className:'rounded border-gray-300',
+                      checked:assignedIds.includes(w.id),
+                      onChange:(e)=>onToggleAssign(w.id, e.target.checked),
+                      'aria-label':`Affecter ${w.full_name || w.email} au chantier`
+                    }),
+                    React.createElement('span',null,'Affecté')
+                  ),
+                  React.createElement('button',{
+                    className:'p-2 rounded-lg border hover:bg-red-50 hover:border-red-300 text-red-600',
+                    title:'Supprimer définitivement cet ouvrier',
+                    onClick:()=>onDeleteWorker(w),
+                    'aria-label':`Supprimer définitivement ${w.full_name || w.email}`
+                  }, '🗑️')
+                )
+              ))
+            ) : React.createElement('div',{className:'text-sm text-gray-500'},
+              'Aucun ouvrier.'
+            )
+        )
+      );
+    }
+
+    function TimesheetSection({
+      projectId,
+      assignedWorkers,
+      days,
+      ym,
+      weekdayLabelFn,
+      editingCell,
+      editingValue,
+      setEditingCell,
+      setEditingValue,
+      timeHelpers,
+      setHours,
+      upsertEntry,
+      toggleStatus,
+      totalsByWorker,
+      byWorkerDate
+    }){
+      return React.createElement('section',{className:'bg-white rounded-2xl border shadow-sm'},
+        React.createElement('div',{className:'px-4 py-3 border-b flex items-center gap-3'},
+          React.createElement('h2',{className:'font-semibold'},'Timesheet (', ym, ')'),
+          !projectId && React.createElement('div',{
+            className:'text-sm text-red-600',
+            role:'alert'
+          },'Sélectionnez un chantier.')
+        ),
+        React.createElement('div',{className:'p-4 overflow-auto'},
+          (projectId && assignedWorkers.length) ? React.createElement('table',{
+            className:'w-full text-sm border-separate border-spacing-y-1',
+            role:'table',
+            'aria-label':'Feuille de temps'
+          },
+            React.createElement('thead',null,
+              React.createElement('tr',{className:'text-left text-gray-500 border-b'},
+                React.createElement('th',{className:'py-2 pr-2 w-56',scope:'col'},'Ouvrier'),
+                Array.from({length:days}, (_,i)=>i+1).map(d =>
+                  React.createElement('th',{
+                    key:d,
+                    className:'py-2 pr-2 cell',
+                    scope:'col'
+                  },
+                    React.createElement('div',{className:'flex flex-col items-center leading-tight'},
+                      React.createElement('div',{className:'font-medium'}, d),
+                      React.createElement('div',{className:'text-[10px] text-gray-500 mt-0.5'},
+                        weekdayLabelFn(ym, d))
+                    )
+                  )
+                )
+              )
+            ),
+            React.createElement('tbody',null,
+              assignedWorkers.map(w => React.createElement('tr',{
+                key:w.id,
+                className:'border-b last:border-none align-middle'
+              },
+                React.createElement('td',{className:'py-2 pr-2 w-56 sticky-name rounded-l-xl'},
+                  React.createElement('div',{className:'font-semibold truncate'},
+                    w.full_name || w.email || w.id.slice(0,8)),
+                  React.createElement('div',{className:'text-xs text-gray-500 mt-0.5'},
+                    'Total: ', (totalsByWorker[w.id]||0).toFixed(2), ' h'
+                  )
+                ),
+                Array.from({length:days}, (_,i)=>i+1).map(day=>{
+                  const [y,m] = ym.split('-').map(Number);
+                  const iso = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+                  const e = byWorkerDate[`${w.id}|${iso}`];
+                  const status = e?.status || 'absent';
+                  const hours = e?.hours ?? 0;
+                  const wd = weekdayLabelFn(ym, day);
+                  const weekend = (wd==='Sam' || wd==='Dim');
+
+                  const cellKey = `${w.id}|${day}`;
+                  const isEditing = editingCell === cellKey;
+                  const displayValue = isEditing ? editingValue : timeHelpers.decimalToHHMM(hours);
+
+                  return React.createElement('td',{
+                    key:day,
+                    className:`py-2 pr-2 cell ${weekend ? 'bg-gray-150' : ''}`
+                  },
+                    React.createElement('div',{className:'flex flex-col items-center gap-1'},
+                      React.createElement('input',{
+                        type: 'text',
+                        className:'px-2 py-1 rounded-lg border text-center w-16',
+                        value: displayValue,
+                        placeholder: '0:00',
+                        'aria-label': `Heures pour ${w.full_name || w.email} jour ${day}`,
+                        onFocus: (ev) => {
+                          setEditingCell(cellKey);
+                          setEditingValue(timeHelpers.decimalToHHMM(hours));
+                          ev.target.select();
+                        },
+                        onChange: (ev) => {
+                          const value = ev.target.value.replace(/[^\d:]/g, '');
+                          setEditingValue(value);
+                        },
+                        onKeyDown: (ev) => {
+                          if(ev.key === 'Enter' || ev.key === 'Tab') {
+                            ev.preventDefault();
+                            const formatted = timeHelpers.validateTime(editingValue);
+                            const decimal = timeHelpers.hhmmToDecimal(formatted || editingValue);
+                            setHours(w.id, day, decimal);
+                            if(decimal > 0) {
+                              upsertEntry(w.id, day, { hours: decimal, status: 'worked' });
+                            } else {
+                              upsertEntry(w.id, day, { hours: 0, status: 'absent' });
+                            }
+                            setEditingCell(null);
+                            setEditingValue('');
+                          } else if(ev.key === 'Escape') {
+                            setEditingCell(null);
+                            setEditingValue('');
+                          }
+                        },
+                        onBlur: (ev) => {
+                          if(isEditing) {
+                            const formatted = timeHelpers.validateTime(editingValue);
+                            const decimal = timeHelpers.hhmmToDecimal(formatted || editingValue);
+                            if(decimal > 0) {
+                              setHours(w.id, day, decimal);
+                              upsertEntry(w.id, day, { hours: decimal, status: 'worked' });
+                            } else if(editingValue === '') {
+                              setHours(w.id, day, 0);
+                              upsertEntry(w.id, day, { hours: 0, status: 'absent' });
+                            }
+                            setEditingCell(null);
+                            setEditingValue('');
+                          }
+                        }
+                      }),
+                      React.createElement('button',{
+                        className:`badge ${status==='worked'?'bg-emerald-50':'bg-gray-50'}`,
+                        onClick: ()=> toggleStatus(w.id, day),
+                        'aria-label': `${status} - cliquer pour changer`
+                      }, status==='worked' ? 'Travaillé' : 'Absent')
+                    )
+                  );
+                })
+              ))
+            )
+          ) : React.createElement('div',{className:'text-sm text-gray-500'},
+            projectId ? 'Aucun ouvrier affecté à ce chantier.' : 'Sélectionnez un chantier.'
+          )
+        )
+      );
+    }
+
     // Dashboard principal
     function Dashboard({ user }){
       // Helpers de temps
@@ -601,6 +851,12 @@
         setAllEntries(data||[]);
       }, [user.id, from, to]);
 
+      const refreshData = useCallback(() => Promise.all([
+        loadEntries(),
+        loadGlobalTotals(),
+        loadAllEntries()
+      ]), [loadEntries, loadGlobalTotals, loadAllEntries]);
+
       // NOUVELLE FONCTION: Supprimer un projet (soft delete)
       const onDeleteProject = useCallback(async () => {
         if (!projectId) return;
@@ -639,8 +895,8 @@
         setProjectId(null);
         closeModal('projectSettings');
 
-        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
-      }, [projectId, projects, user.id, closeModal, loadEntries, loadGlobalTotals, loadAllEntries]);
+        await refreshData();
+      }, [projectId, projects, user.id, closeModal, refreshData]);
 
       // NOUVELLE FONCTION: Supprimer un ouvrier (soft delete)
       const onDeleteWorker = useCallback(async (w) => {
@@ -679,8 +935,8 @@
           .order('created_at',{ascending:false});
         setWorkers(wk2 || []);
 
-        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
-      }, [user.id, loadEntries, loadGlobalTotals, loadAllEntries]);
+        await refreshData();
+      }, [user.id, refreshData]);
 
       // Gestion des taux ouvriers
       const startEditRate = useCallback((worker) => {
@@ -713,8 +969,8 @@
           .order('created_at',{ascending:false});
         setWorkers(wk||[]);
         setEditingRate(null);
-        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
-      }, [editRates, user.id, loadEntries, loadGlobalTotals, loadAllEntries]);
+        await refreshData();
+      }, [editRates, user.id, refreshData]);
 
       // Actions CRUD
       const createProject = useCallback(async (e) => {
@@ -816,8 +1072,8 @@
         };
         const { error } = await supabase.from('time_entries').upsert(record, { onConflict: 'owner,project_id,worker_id,work_date' });
         if(error) return alert(error.message);
-        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
-      }, [projectId, ym, byWorkerDate, user.id, loadEntries, loadGlobalTotals, loadAllEntries]);
+        await refreshData();
+      }, [projectId, ym, byWorkerDate, user.id, refreshData]);
 
       const setHours = useCallback((workerId, day, val) => {
         let h = typeof val === 'string' && val.includes(':') ? timeHelpers.hhmmToDecimal(val) : toNum(val);
@@ -1221,219 +1477,39 @@
 
         // Main
         React.createElement('main',{className:'max-w-7xl mx-auto p-4 space-y-6'},
-          // Ouvriers
-          React.createElement('section',{className:'bg-white rounded-2xl border shadow-sm'},
-            React.createElement('div',{
-              className:'px-4 py-3 border-b flex items-center gap-3 cursor-pointer select-none', 
-              onClick:()=>setOpenWorkers(v=>!v),
-              role:'button',
-              'aria-expanded': openWorkers,
-              'aria-controls': 'workers-panel'
-            },
-              React.createElement('h2',{className:'font-semibold'},'Ouvriers'),
-              React.createElement('div',{className:'ml-auto text-xs text-gray-500'}, 
-                `${workers.length} ouvrier(s)`),
-              React.createElement('button',{
-                type:'button', 
-                onClick:(e)=>{ e.stopPropagation(); openModal('addWorker'); },
-                className:'ml-3 btn'
-              }, 'Ajouter'),
-              React.createElement('span',{className:'text-gray-400','aria-hidden':'true'}, 
-                openWorkers ? '▾' : '▸')
-            ),
-            openWorkers && React.createElement('div',{id:'workers-panel',className:'p-4'},
-              !projectId ? React.createElement('div',{className:'text-sm text-gray-500'},
-                'Sélectionnez un chantier pour gérer les affectations.')
-              : workers.length ? React.createElement('ul',{className:'text-sm divide-y'},
-                  workers.map(w => React.createElement('li',{key:w.id,className:'py-2 flex items-center gap-3'},
-                    React.createElement('div',{className:'min-w-0 flex-1'},
-                      React.createElement('div',{className:'font-medium truncate'},
-                        w.full_name || w.email || w.id.slice(0,8)
-                      ),
-                      w.email ? React.createElement('div',{className:'text-xs text-gray-500 truncate'}, w.email) : null
-                    ),
-                    React.createElement('div',{className:'flex items-center gap-2'},
-                      (editingRate === w.id)
-                      ? React.createElement(React.Fragment, null,
-                          React.createElement('input',{
-                            className:'w-24 px-2 py-1 rounded-lg border text-right',
-                            autoFocus:true,
-                            value:(editRates[w.id] ?? '').toString(),
-                            onChange:(e)=>setEditRates(s=>({...s,[w.id]: e.target.value})),
-                            onKeyDown:(e)=>{
-                              if(e.key === 'Enter'){
-                                e.preventDefault();
-                                saveWorkerRate(w.id);
-                              } else if(e.key === 'Escape'){
-                                cancelEditRate();
-                              }
-                            }
-                          }),
-                          React.createElement('span',null,'€/h'),
-                          React.createElement('button',{
-                            className:'px-2 py-1 rounded-lg border hover:bg-gray-50',
-                            onClick:()=>saveWorkerRate(w.id),
-                            'aria-label':'Valider'
-                          }, '✓'),
-                          React.createElement('button',{
-                            className:'px-2 py-1 rounded-lg border hover:bg-gray-50',
-                            onClick:cancelEditRate,
-                            'aria-label':'Annuler'
-                          }, '✖')
-                        )
-                      : React.createElement('button',{
-                          className:'px-2 py-1 rounded-lg border bg-white hover:bg-gray-50 whitespace-nowrap',
-                          onClick:()=>startEditRate(w),
-                          'aria-label':`Modifier le taux de ${w.full_name || w.email}`
-                        }, `${toNum(w.pay_rate).toFixed(2)} €/h`),
-                      React.createElement('label',{className:'ml-2 flex items-center gap-2'},
-                        React.createElement('input',{
-                          type:'checkbox',
-                          checked: assignedIds.includes(w.id),
-                          onChange: e=>toggleAssign(w.id, e.target.checked),
-                          'aria-label':`Affecter ${w.full_name || w.email} au chantier`
-                        }),
-                        React.createElement('span',null,'Affecté')
-                      ),
-                      React.createElement('button',{
-                        className:'p-2 rounded-lg border hover:bg-red-50 hover:border-red-300 text-red-600',
-                        title:'Supprimer définitivement cet ouvrier',
-                        onClick: ()=>onDeleteWorker(w),
-                        'aria-label':`Supprimer définitivement ${w.full_name || w.email}`
-                      }, '🗑️')
-                    )
-                  ))
-                ) : React.createElement('div',{className:'text-sm text-gray-500'},'Aucun ouvrier.')
-            )
-          ),
-
-          // Timesheet
-          React.createElement('section',{className:'bg-white rounded-2xl border shadow-sm'},
-            React.createElement('div',{className:'px-4 py-3 border-b flex items-center gap-3'},
-              React.createElement('h2',{className:'font-semibold'},'Timesheet (', ym, ')'),
-              !projectId && React.createElement('div',{
-                className:'text-sm text-red-600',
-                role:'alert'
-              },'Sélectionnez un chantier.')
-            ),
-            React.createElement('div',{className:'p-4 overflow-auto'},
-              (projectId && assignedWorkers.length) ? React.createElement('table',{
-                className:'w-full text-sm border-separate border-spacing-y-1',
-                role:'table',
-                'aria-label':'Feuille de temps'
-              },
-                React.createElement('thead',null,
-                  React.createElement('tr',{className:'text-left text-gray-500 border-b'},
-                    React.createElement('th',{className:'py-2 pr-2 w-56',scope:'col'},'Ouvrier'),
-                    Array.from({length:days}, (_,i)=>i+1).map(d =>
-                      React.createElement('th',{
-                        key:d,
-                        className:'py-2 pr-2 cell',
-                        scope:'col'
-                      },
-                        React.createElement('div',{className:'flex flex-col items-center leading-tight'},
-                          React.createElement('div',{className:'font-medium'}, d),
-                          React.createElement('div',{className:'text-[10px] text-gray-500 mt-0.5'}, 
-                            weekdayLabel(ym, d))
-                        )
-                      )
-                    )
-                  )
-                ),
-                React.createElement('tbody',null,
-                  assignedWorkers.map(w => React.createElement('tr',{
-                    key:w.id,
-                    className:'border-b last:border-none align-middle'
-                  },
-                    React.createElement('td',{className:'py-2 pr-2 w-56 sticky-name rounded-l-xl'},
-                      React.createElement('div',{className:'font-semibold truncate'}, 
-                        w.full_name || w.email || w.id.slice(0,8)),
-                      React.createElement('div',{className:'text-xs text-gray-500 mt-0.5'},
-                        'Total: ', (totalsByWorker[w.id]||0).toFixed(2), ' h'
-                      )
-                    ),
-                    Array.from({length:days}, (_,i)=>i+1).map(day=>{
-                      const [y,m] = ym.split('-').map(Number);
-                      const iso = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-                      const e = byWorkerDate[`${w.id}|${iso}`];
-                      const status = e?.status || 'absent';
-                      const hours = e?.hours ?? 0;
-                      const wd = weekdayLabel(ym, day);
-                      const weekend = (wd==='Sam' || wd==='Dim');
-                      
-                      const cellKey = `${w.id}|${day}`;
-                      const isEditing = editingCell === cellKey;
-                      const displayValue = isEditing ? editingValue : timeHelpers.decimalToHHMM(hours);
-                      
-                      return React.createElement('td',{
-                        key:day,
-                        className:`py-2 pr-2 cell ${weekend ? 'bg-gray-150' : ''}`
-                      },
-                        React.createElement('div',{className:'flex flex-col items-center gap-1'},
-                          React.createElement('input',{
-                            type: 'text',
-                            className:'px-2 py-1 rounded-lg border text-center w-16',
-                            value: displayValue,
-                            placeholder: '0:00',
-                            'aria-label': `Heures pour ${w.full_name || w.email} jour ${day}`,
-                            onFocus: (ev) => {
-                              setEditingCell(cellKey);
-                              setEditingValue(timeHelpers.decimalToHHMM(hours));
-                              ev.target.select();
-                            },
-                            onChange: (ev) => {
-                              const value = ev.target.value.replace(/[^\d:]/g, '');
-                              setEditingValue(value);
-                            },
-                            onKeyDown: (ev) => {
-                              if(ev.key === 'Enter' || ev.key === 'Tab') {
-                                ev.preventDefault();
-                                const formatted = timeHelpers.validateTime(editingValue);
-                                const decimal = timeHelpers.hhmmToDecimal(formatted || editingValue);
-                                setHours(w.id, day, decimal);
-                                if(decimal > 0) {
-                                  upsertEntry(w.id, day, { hours: decimal, status: 'worked' });
-                                } else {
-                                  upsertEntry(w.id, day, { hours: 0, status: 'absent' });
-                                }
-                                setEditingCell(null);
-                                setEditingValue('');
-                              } else if(ev.key === 'Escape') {
-                                setEditingCell(null);
-                                setEditingValue('');
-                              }
-                            },
-                            onBlur: (ev) => {
-                              if(isEditing) {
-                                const formatted = timeHelpers.validateTime(editingValue);
-                                const decimal = timeHelpers.hhmmToDecimal(formatted || editingValue);
-                                if(decimal > 0) {
-                                  setHours(w.id, day, decimal);
-                                  upsertEntry(w.id, day, { hours: decimal, status: 'worked' });
-                                } else if(editingValue === '') {
-                                  setHours(w.id, day, 0);
-                                  upsertEntry(w.id, day, { hours: 0, status: 'absent' });
-                                }
-                                setEditingCell(null);
-                                setEditingValue('');
-                              }
-                            }
-                          }),
-                          React.createElement('button',{
-                            className:`badge ${status==='worked'?'bg-emerald-50':'bg-gray-50'}`,
-                            onClick: ()=> toggleStatus(w.id, day),
-                            'aria-label': `${status} - cliquer pour changer`
-                          }, status==='worked' ? 'Travaillé' : 'Absent')
-                        )
-                      );
-                    })
-                  ))
-                )
-              ) : React.createElement('div',{className:'text-sm text-gray-500'},
-                projectId ? 'Aucun ouvrier affecté à ce chantier.' : 'Sélectionnez un chantier.'
-              )
-            )
-          )
+          React.createElement(WorkersPanel,{
+            openWorkers,
+            onToggleOpen:()=>setOpenWorkers(v=>!v),
+            projectId,
+            workers,
+            onOpenAddWorker:()=>openModal('addWorker'),
+            editingRate,
+            editRates,
+            onRateChange:(workerId, value)=>setEditRates(s=>({...s,[workerId]: value})),
+            onSaveWorkerRate:saveWorkerRate,
+            onCancelEditRate:cancelEditRate,
+            onStartEditRate:startEditRate,
+            assignedIds,
+            onToggleAssign:toggleAssign,
+            onDeleteWorker:onDeleteWorker
+          }),
+          React.createElement(TimesheetSection,{
+            projectId,
+            assignedWorkers,
+            days,
+            ym,
+            weekdayLabelFn:weekdayLabel,
+            editingCell,
+            editingValue,
+            setEditingCell,
+            setEditingValue,
+            timeHelpers,
+            setHours,
+            upsertEntry,
+            toggleStatus,
+            totalsByWorker,
+            byWorkerDate
+          })
         )
       );
     }
