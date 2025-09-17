@@ -1,4 +1,4 @@
-import { ChangeEvent, Dispatch, FocusEvent, KeyboardEvent, SetStateAction } from 'react';
+import { ChangeEvent, FocusEvent, KeyboardEvent } from 'react';
 import { TimeEntry, Worker } from '../../types/models';
 import { weekdayLabel } from '../../utils/dateUtils';
 import { TimeHelpers } from './types';
@@ -10,8 +10,8 @@ interface TimesheetSectionProps {
   days: number;
   editingCell: string | null;
   editingValue: string;
-  setEditingCell: Dispatch<SetStateAction<string | null>>;
-  setEditingValue: Dispatch<SetStateAction<string>>;
+  setEditingCell: (value: string | null) => void;
+  setEditingValue: (value: string) => void;
   timeHelpers: TimeHelpers;
   setHours: (workerId: string, day: number, value: string | number) => void;
   toggleStatus: (workerId: string, day: number) => void;

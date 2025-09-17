@@ -281,10 +281,22 @@ export const useDashboardData = (user: User): DashboardState => {
     let factu = 0;
     let paie = 0;
 
-    (response.data ?? []).forEach((entry) => {
+    type BillRateRecord = { bill_rate: number | string | null };
+    type PayRateRecord = { pay_rate: number | string | null };
+    type GlobalTotalsRow = {
+      hours: number | string | null;
+      project: BillRateRecord | BillRateRecord[] | null;
+      worker: PayRateRecord | PayRateRecord[] | null;
+    };
+
+    const rows = (response.data ?? []) as unknown as GlobalTotalsRow[];
+
+    rows.forEach((entry) => {
+      const project = Array.isArray(entry.project) ? entry.project[0] : entry.project;
+      const worker = Array.isArray(entry.worker) ? entry.worker[0] : entry.worker;
       const h = toNum(entry.hours);
-      const br = toNum(entry.project?.bill_rate);
-      const wr = toNum(entry.worker?.pay_rate);
+      const br = toNum(project?.bill_rate);
+      const wr = toNum(worker?.pay_rate);
       hours += h;
       factu += h * br;
       paie += h * wr;

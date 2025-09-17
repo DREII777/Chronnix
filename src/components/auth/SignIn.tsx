@@ -1,4 +1,5 @@
 import { FormEvent, MutableRefObject, useMemo, useRef, useState } from 'react';
+import logoUrl from '../../assets/logo.svg';
 import { supabase } from '../../services/supabaseClient';
 
 const CODE_LENGTH = 6;
@@ -13,7 +14,10 @@ const SignIn = () => {
   const [notWhitelisted, setNotWhitelisted] = useState(false);
   const [codeDigits, setCodeDigits] = useState<string[]>(Array(CODE_LENGTH).fill(''));
 
-  const codeRefs = useMemo<InputRefs>(() => Array.from({ length: CODE_LENGTH }, () => useRef<HTMLInputElement | null>(null)), []);
+  const codeRefs = useMemo<InputRefs>(
+    () => Array.from({ length: CODE_LENGTH }, () => useRef<HTMLInputElement | null>(null)),
+    [],
+  );
 
   const handleRequestCode = async (event: FormEvent) => {
     event.preventDefault();
@@ -76,13 +80,15 @@ const SignIn = () => {
 
   if (notWhitelisted) {
     return (
-      <div className="min-h-screen grid place-items-center p-6">
+      <main className="min-h-screen grid place-items-center p-6" aria-labelledby="access-denied-heading">
         <div className="bg-white border rounded-2xl shadow-sm p-6 w-full max-w-md space-y-5 text-center">
           <div className="flex justify-center mb-4">
-            <img src="./logo.png" alt="Chronix logo" className="h-12 w-auto rounded-xl" />
+            <img src={logoUrl} alt="Chronnix" className="h-12 w-auto" loading="lazy" />
           </div>
           <div className="space-y-3">
-            <h1 className="text-xl font-semibold text-gray-900">Accès non autorisé</h1>
+            <h1 id="access-denied-heading" className="text-xl font-semibold text-gray-900">
+              Accès non autorisé
+            </h1>
             <p className="text-gray-600">
               Votre adresse e-mail ne fait pas partie des utilisateurs autorisés pour cette application.
             </p>
@@ -100,16 +106,18 @@ const SignIn = () => {
             Essayer avec un autre e-mail
           </button>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen grid place-items-center p-6">
+    <main className="min-h-screen grid place-items-center p-6" aria-labelledby="sign-in-heading">
       <div className="bg-white border rounded-2xl shadow-sm p-6 w-full max-w-md space-y-5">
         <div className="flex items-center gap-3">
-          <img src="./logo.png" alt="Chronix logo" className="h-12 w-auto rounded-xl" />
-          <h1 className="text-xl font-semibold">{sent ? 'Entrez le code' : 'Connexion'}</h1>
+          <img src={logoUrl} alt="Chronnix" className="h-12 w-auto" loading="lazy" />
+          <h1 id="sign-in-heading" className="text-xl font-semibold">
+            {sent ? 'Entrez le code' : 'Connexion'}
+          </h1>
         </div>
         {!sent ? (
           <form onSubmit={handleRequestCode} className="space-y-3">
@@ -121,14 +129,20 @@ const SignIn = () => {
                 id="email"
                 type="email"
                 required
+                autoComplete="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 className="mt-1 w-full px-3 py-2 rounded-xl border"
                 placeholder="vous@exemple.com"
               />
             </div>
-            <button type="submit" disabled={loading} className="w-full btn btn-primary">
-              {loading ? 'Vérification...' : 'Recevoir le code'}
+            <button
+              type="submit"
+              disabled={loading}
+              aria-busy={loading}
+              className="w-full btn btn-primary"
+            >
+              {loading ? 'Vérification…' : 'Recevoir le code'}
             </button>
           </form>
         ) : (
@@ -144,6 +158,7 @@ const SignIn = () => {
                   className="otp-input"
                   inputMode="numeric"
                   maxLength={1}
+                  aria-label={`Chiffre ${index + 1}`}
                   value={codeDigits[index]}
                   onChange={(event) => {
                     const digit = event.target.value.replace(/\D/g, '').slice(0, 1);
@@ -183,18 +198,23 @@ const SignIn = () => {
             <button
               type="submit"
               disabled={loading || codeDigits.join('').length < CODE_LENGTH}
+              aria-busy={loading}
               className="w-full btn btn-primary"
             >
-              {loading ? 'Vérification...' : 'Se connecter'}
+              {loading ? 'Vérification…' : 'Se connecter'}
             </button>
             <button type="button" onClick={resetEmail} className="text-xs text-gray-500 underline">
               Changer d'e-mail
             </button>
           </form>
         )}
-        {error && <div className="text-sm text-red-600">{error}</div>}
+        {error && (
+          <div className="text-sm text-red-600" role="alert" aria-live="assertive">
+            {error}
+          </div>
+        )}
       </div>
-    </div>
+    </main>
   );
 };
 

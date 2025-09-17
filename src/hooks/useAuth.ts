@@ -20,7 +20,7 @@ export const useAuth = (): AuthState => {
     });
 
     return () => {
-      data.subscription.unsubscribe();
+      data.subscription?.unsubscribe();
     };
   }, []);
 
