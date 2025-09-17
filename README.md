@@ -8,7 +8,7 @@ Chronnix est une application React + TypeScript permettant de gérer les chantie
 - **Tableau de bord par chantier** : sélection d'un projet, navigation mensuelle, affichage des totaux (heures, facturation, paie) et bandeau de notifications éphémères.
 - **Gestion des équipes** : panneau latéral pour créer/supprimer des ouvriers, ajuster le taux horaire, contrôler les assignations (`project_workers`).
 - **Feuille de temps interactive** : saisie rapide des heures, alternance statut travaillé/absent, validations `HH:MM` ↔ décimal, calcul des totaux par ouvrier et persistance locale du contexte (chantier + mois).
-- **Exports comptables** : génération à la volée de deux fichiers XLSX (paie & détail) via `xlsx`, pré-chargement automatique du module et téléchargement formaté.
+- **Exports comptables** : génération à la volée de deux fichiers XLSX (paie & détail) via `exceljs`, pré-chargement automatique du module et téléchargement formaté.
 - **Expérience prête pour la production** : manifest PWA, service worker minimal, boutons accessibles, raccourcis clavier pour naviguer dans les champs OTP et fermeture automatique des messages de feedback.
 
 ## Stack technique
@@ -16,7 +16,7 @@ Chronnix est une application React + TypeScript permettant de gérer les chantie
 - [React 18](https://react.dev/) + [TypeScript 5](https://www.typescriptlang.org/)
 - [Vite 5](https://vitejs.dev/) pour le bundling et le serveur de dev
 - [Supabase JS 2](https://supabase.com/docs/reference/javascript/introduction) pour l'authentification et le CRUD
-- [xlsx](https://github.com/SheetJS/sheetjs) pour les exports Excel
+- [exceljs](https://github.com/exceljs/exceljs) pour les exports Excel
 - CSS utilitaire maison (`src/styles.css`) + classes utilitaires Tailwind chargées en CDN dans `index.html`
 - Service worker (`sw.js`) et manifest (`manifest.json`) pour l'installation en web app
 
@@ -55,8 +55,8 @@ Chronnix est une application React + TypeScript permettant de gérer les chantie
   - `workers` (nom, email, taux paie, propriétaire).
   - `project_workers` (relations n↔n entre projets et ouvriers).
   - `time_entries` (heures/jour, statut, notes éventuelles).
-- **Hooks clés** : `useAuth` orchestre la session Supabase (écoute des changements, erreurs). `useDashboardData` centralise les appels CRUD, la gestion des modales, l'état d'édition, les exports et la synchronisation locale (localStorage + préchargement `xlsx`).
-- **Services** : `supabaseClient.ts` applique la configuration validée par `src/config.ts`. `xlsxService.ts` produit les feuilles "Paie" et "Détail" avec totaux, en s'appuyant sur les helpers date/heure.
+- **Hooks clés** : `useAuth` orchestre la session Supabase (écoute des changements, erreurs). `useDashboardData` centralise les appels CRUD, la gestion des modales, l'état d'édition, les exports et la synchronisation locale (localStorage + préchargement d'`exceljs`).
+- **Services** : `supabaseClient.ts` applique la configuration validée par `src/config.ts`. `xlsxService.ts` produit les feuilles "Paie" et "Détail" (totaux, mise en page, styles) en s'appuyant sur les helpers date/heure.
 
 ## Configuration Supabase
 
@@ -74,10 +74,18 @@ Chronnix est une application React + TypeScript permettant de gérer les chantie
 npm install      # installe les dépendances
 npm run dev      # lance Vite en mode développement
 npm run build    # vérifie les types (tsc) puis construit le bundle
+npm run test     # exécute les tests unitaires (Vitest)
 npm run preview  # sert le build pour validation finale
 ```
 
 Les dépendances Playwright sont présentes mais aucun scénario de test n'est fourni. `npm run build` constitue donc la validation minimale avant déploiement.
+
+## Export Excel (mise en page & options)
+
+- Le builder `buildTimesheetsWorkbook` s'appuie sur `exceljs` pour produire des feuilles portrait mises à l'échelle sur une page avec marges fines (0,5"), zone d'impression définie et répétition automatique de la ligne d'en-tête.
+- L'en-tête adopte un fond doux (`#E8F1FF`), un texte en gras centré et des bordures fines ; le corps est zébré une ligne sur deux (`#F7F7F8`), aligné à gauche, avec largeurs de colonnes adaptées et gel de la première ligne/colonne.
+- Le menu Export propose deux options activées par défaut : **One-page portrait** (mise en page) et **Couleurs** (styles). Elles permettent de générer un export neutre au besoin sans modifier la structure des données.
+- Le fichier détaillé est téléchargé sous le nom `Chronnix_Timesheets_YYYY-MM-DD.xlsx`, tout en conservant le contenu et les colonnes d'origine.
 
 ## Notes de développement
 
