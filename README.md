@@ -1,6 +1,6 @@
 # Chronnix — feuille de temps connectée à Supabase
 
-Chronnix est une application React + TypeScript permettant aux équipes TMF Compta de gérer les chantiers, les ouvriers et les heures travaillées. Cette version modulaire remplace l'ancienne page HTML en centralisant l'authentification OTP, la planification mensuelle, le suivi des taux horaires et les exports comptables (paie & détaillé) dans une interface unifiée.
+Chronnix est une application React + TypeScript permettant de gérer les chantiers, les ouvriers et les heures travaillées. Cette version modulaire remplace l'ancienne page HTML en centralisant l'authentification OTP, la planification mensuelle, le suivi des taux horaires et les exports comptables (paie & détaillé) dans une interface unifiée.
 
 ## Fonctionnalités principales
 
