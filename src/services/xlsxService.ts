@@ -1,11 +1,141 @@
+import ExcelJS from 'exceljs';
 import { Project, TimeEntry, Worker } from '../types/models';
 import { dayLabels, monthBounds } from '../utils/dateUtils';
 import { entriesByKey } from '../utils/entriesUtils';
 import { hhmmFromDecimal, sumHHMM } from '../utils/timeUtils';
 import { toNum } from '../utils/numberUtils';
 
+export interface TimesheetSheetData {
+  name: string;
+  rows: (string | number | null)[][];
+}
+
+export interface TimesheetWorkbookData {
+  sheets: TimesheetSheetData[];
+}
+
+export interface TimesheetWorkbookOptions {
+  applyPrintSetup: boolean;
+  applyColors: boolean;
+}
+
+const DEFAULT_TIMESHEET_OPTIONS: TimesheetWorkbookOptions = {
+  applyPrintSetup: true,
+  applyColors: true,
+};
+
+const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F1FF' } } as const;
+const ZEBRA_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F7F8' } } as const;
+const BORDER = {
+  top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+  left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+  bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+  right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+} as const;
+
+export const buildTimesheetsWorkbook = (
+  data: TimesheetWorkbookData,
+  options: Partial<TimesheetWorkbookOptions> = {},
+): ExcelJS.Workbook => {
+  const workbook = new ExcelJS.Workbook();
+  const resolvedOptions: TimesheetWorkbookOptions = { ...DEFAULT_TIMESHEET_OPTIONS, ...options };
+
+  data.sheets.forEach(({ name, rows }) => {
+    const worksheet = workbook.addWorksheet(name.slice(0, 31));
+    rows.forEach((row) => worksheet.addRow(row));
+
+    if (!rows.length) {
+      return;
+    }
+
+    const columnCount = rows[0]?.length ?? 0;
+    const rowCount = rows.length;
+
+    worksheet.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
+
+    rows.forEach((row, rowIndex) => {
+      row.forEach((_, columnIndex) => {
+        const cell = worksheet.getCell(rowIndex + 1, columnIndex + 1);
+        cell.border = BORDER;
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: rowIndex === 0 ? 'center' : 'left',
+          wrapText: true,
+        };
+
+        if (rowIndex === 0) {
+          cell.font = { bold: true };
+          if (resolvedOptions.applyColors) {
+            cell.fill = HEADER_FILL;
+          }
+        } else if (resolvedOptions.applyColors && rowIndex % 2 === 1) {
+          cell.fill = ZEBRA_FILL;
+        }
+      });
+    });
+
+    for (let colIndex = 0; colIndex < columnCount; colIndex += 1) {
+      let maxLength = 4;
+      rows.forEach((row) => {
+        const value = row[colIndex];
+        if (value === null || value === undefined) {
+          return;
+        }
+        const text = typeof value === 'number' ? value.toFixed(2) : String(value);
+        maxLength = Math.max(maxLength, text.length);
+      });
+      worksheet.getColumn(colIndex + 1).width = Math.min(40, maxLength + 2);
+    }
+
+    if (columnCount > 0 && rowCount > 0) {
+      const lastColumn = worksheet.getColumn(columnCount).letter;
+      worksheet.pageSetup.printArea = `A1:${lastColumn}${rowCount}`;
+      worksheet.pageSetup.printTitlesRow = '1:1';
+
+      if (resolvedOptions.applyPrintSetup) {
+        worksheet.pageSetup.orientation = 'landscape';
+        worksheet.pageSetup.fitToPage = true;
+        worksheet.pageSetup.fitToWidth = 1;
+        worksheet.pageSetup.fitToHeight = 1;
+        worksheet.pageSetup.horizontalCentered = true;
+        worksheet.pageSetup.verticalCentered = false;
+        worksheet.pageSetup.margins = {
+          left: 0.5,
+          right: 0.5,
+          top: 0.5,
+          bottom: 0.5,
+          header: 0.3,
+          footer: 0.3,
+        };
+      }
+    }
+  });
+
+  return workbook;
+};
+
+const triggerBrowserDownload = async (workbook: ExcelJS.Workbook, filename: string) => {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
+const withBrowserDownload = async (workbook: ExcelJS.Workbook, filename: string) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  await triggerBrowserDownload(workbook, filename);
+};
+
 export const exportPayrollXlsx = async (entries: TimeEntry[], yearMonth: string): Promise<void> => {
-  const XLSX = await import('xlsx');
   const summary = new Map<
     string,
     {
@@ -51,12 +181,22 @@ export const exportPayrollXlsx = async (entries: TimeEntry[], yearMonth: string)
 
   rows.push({ Ouvrier: 'TOTAL', Heures: totalHours, Taux: null, Montant: totalAmount });
 
-  const sheet = XLSX.utils.json_to_sheet(rows, {
-    header: ['Ouvrier', 'Heures', 'Taux', 'Montant'],
-  });
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Paie');
-  XLSX.writeFile(workbook, `paie_${yearMonth}.xlsx`);
+  const workbook = buildTimesheetsWorkbook(
+    {
+      sheets: [
+        {
+          name: 'Paie',
+          rows: [
+            ['Ouvrier', 'Heures', 'Taux', 'Montant'],
+            ...rows.map((row) => [row.Ouvrier, row.Heures, row.Taux, row.Montant]),
+          ],
+        },
+      ],
+    },
+    { applyPrintSetup: false },
+  );
+
+  await withBrowserDownload(workbook, `paie_${yearMonth}.xlsx`);
 };
 
 interface DetailExportParams {
@@ -66,64 +206,67 @@ interface DetailExportParams {
   workers: Worker[];
   entries: TimeEntry[];
   allEntries: TimeEntry[];
+  options?: Partial<TimesheetWorkbookOptions>;
 }
 
-export const exportDetailXlsx = async ({
-  yearMonth,
-  projectId,
-  projects,
-  workers,
-  entries,
-  allEntries,
-}: DetailExportParams): Promise<void> => {
-  const XLSX = await import('xlsx');
-  const workbook = XLSX.utils.book_new();
+const buildTimesheetRows = (
+  sheetEntries: TimeEntry[],
+  sheetWorkers: Worker[],
+  yearMonth: string,
+): (string | number | null)[][] => {
   const labels = dayLabels(yearMonth);
   const { days } = monthBounds(yearMonth);
+  const map = entriesByKey(sheetEntries);
+  const header = ['Ouvrier', ...labels, 'Total'];
+  const data: (string | number | null)[][] = [header];
+
+  sheetWorkers.forEach((worker) => {
+    const row: (string | number | null)[] = Array(header.length).fill(null);
+    row[0] = worker.full_name || worker.email || worker.id.slice(0, 8);
+    const daily: string[] = [];
+
+    for (let day = 1; day <= days; day += 1) {
+      const [year, month] = yearMonth.split('-').map(Number);
+      const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const entry = map[`${worker.id}|${iso}`];
+      const hours = entry ? toNum(entry.hours) : 0;
+      const value = hours > 0 ? hhmmFromDecimal(hours) : '';
+      row[day] = value;
+      daily.push(value);
+    }
+
+    row[header.length - 1] = sumHHMM(daily);
+    data.push(row);
+  });
+
+  const totalRow: (string | number | null)[] = Array(header.length).fill(null);
+  totalRow[0] = 'TOTAL';
+  for (let day = 1; day <= days; day += 1) {
+    const columnValues = data.slice(1).map((r) => r[day]).filter((value): value is string => typeof value === 'string');
+    totalRow[day] = sumHHMM(columnValues);
+  }
+  totalRow[header.length - 1] = sumHHMM(
+    data
+      .slice(1)
+      .map((row) => row[header.length - 1])
+      .filter((value): value is string => typeof value === 'string'),
+  );
+
+  data.push(totalRow);
+
+  return data;
+};
+
+const generateTimesheetSheets = (
+  params: DetailExportParams,
+): TimesheetSheetData[] => {
+  const { yearMonth, projectId, projects, workers, entries, allEntries } = params;
+
+  const sheets: TimesheetSheetData[] = [];
 
   const buildSheet = (sheetName: string, sheetEntries: TimeEntry[], sheetWorkers: Worker[]) => {
-    const map = entriesByKey(sheetEntries);
-    const header = ['Ouvrier', ...labels, 'Total'];
-    const data: (string | number | null)[][] = [header];
-
-    sheetWorkers.forEach((worker) => {
-      const row: (string | number | null)[] = Array(header.length).fill(null);
-      row[0] = worker.full_name || worker.email || worker.id.slice(0, 8);
-      const daily: string[] = [];
-
-      for (let day = 1; day <= days; day += 1) {
-        const [year, month] = yearMonth.split('-').map(Number);
-        const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const entry = map[`${worker.id}|${iso}`];
-        const hours = entry ? toNum(entry.hours) : 0;
-        const value = hours > 0 ? hhmmFromDecimal(hours) : '';
-        row[day] = value;
-        daily.push(value);
-      }
-
-      row[header.length - 1] = sumHHMM(daily);
-      data.push(row);
-    });
-
-    const totalRow: (string | number | null)[] = Array(header.length).fill(null);
-    totalRow[0] = 'TOTAL';
-    for (let day = 1; day <= days; day += 1) {
-      const columnValues = data.slice(1).map((r) => r[day]).filter((value): value is string => typeof value === 'string');
-      totalRow[day] = sumHHMM(columnValues);
-    }
-    totalRow[header.length - 1] = sumHHMM(
-      data
-        .slice(1)
-        .map((row) => row[header.length - 1])
-        .filter((value): value is string => typeof value === 'string'),
-    );
-
-    data.push(totalRow);
-
-    const sheet = XLSX.utils.aoa_to_sheet(data);
-    sheet['!cols'] = [{ wch: 24 }, ...Array(days).fill({ wch: 7 }), { wch: 10 }];
-    sheet['!freeze'] = { xSplit: 1, ySplit: 1 };
-    XLSX.utils.book_append_sheet(workbook, sheet, sheetName.slice(0, 31));
+    const data = buildTimesheetRows(sheetEntries, sheetWorkers, yearMonth);
+    sheets.push({ name: sheetName, rows: data });
   };
 
   if (projectId) {
@@ -151,5 +294,17 @@ export const exportDetailXlsx = async ({
     }
   }
 
-  XLSX.writeFile(workbook, `detail_${yearMonth}.xlsx`);
+  return sheets;
+};
+
+export const exportDetailXlsx = async (params: DetailExportParams): Promise<void> => {
+  const { options, yearMonth } = params;
+  const sheets = generateTimesheetSheets(params);
+  const workbook = buildTimesheetsWorkbook({ sheets }, options);
+  const today = new Date();
+  const isoDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(
+    2,
+    '0',
+  )}`;
+  await withBrowserDownload(workbook, `Chronnix_Timesheets_${isoDate}.xlsx`);
 };
