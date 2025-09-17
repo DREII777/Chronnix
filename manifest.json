@@ -1,0 +1,9 @@
+{
+  "name": "BTP Timesheet – PWA",
+  "short_name": "BTP Timesheet",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#F9FAFB",
+  "theme_color": "#111827",
+  "icons": []
+}

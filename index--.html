@@ -1,0 +1,1382 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Chronix — Timesheet</title>
+  <link rel="icon" href="./logo.png">
+  <meta name="color-scheme" content="light" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = {theme: { extend: { colors: { brand:'#16a34a', brandDark:'#0d7a39' }}}}</script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+  <script src="./config.js"></script>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif}
+    .otp-input{width:2.4rem;height:2.8rem;text-align:center;border-radius:.75rem;border:1px solid #e5e7eb}
+    .cell{min-width:52px;text-align:center}
+    .cell input{min-width:44px;width:100%;text-align:center}
+    .badge{font-size:.7rem;padding:.125rem .375rem;border-radius:.5rem;border:1px solid #e5e7eb;transition:background-color .15s ease}
+    .bg-gray-150{background-color:#eef1f5}
+    .sticky-name{position:sticky;left:0;z-index:20;background:#fff;box-shadow:8px 0 16px -16px rgba(0,0,0,.28),1px 0 0 rgba(0,0,0,.06)}
+    .card{border:1px solid #e5e7eb;border-radius:1rem;box-shadow:0 1px 2px 0 rgba(0,0,0,.05);padding:.75rem;background:#fff}
+    .btn{padding:.375rem .75rem;border-radius:.75rem;border:1px solid #e5e7eb;transition:all .15s ease}
+    .btn:hover{background-color:#f9fafb}
+    .btn-primary{background:#16a34a;color:#fff;border-color:#16a34a}
+    .btn-primary:hover{background:#0d7a39}
+    .btn-danger{background:#dc2626;color:#fff;border-color:#dc2626}
+    .btn-danger:hover{background:#b91c1c}
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+  <div id="root"></div>
+  <script>
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    // Validation de la configuration
+    if(!window.SB?.url || !SB.anon) {
+      document.getElementById('root').innerHTML = '<div class="min-h-screen grid place-items-center p-6"><div class="text-red-600">Configuration Supabase manquante. Vérifiez config.js</div></div>';
+      throw new Error('Missing Supabase config');
+    }
+    const supabase = window.supabase.createClient(SB.url, SB.anon);
+
+    // Utilitaires globaux (constants)
+    const toNum = (v) => Number(String(v).replace(',','.')) || 0;
+    const WEEKDAYS = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+    const weekdayLabel = (ym, day) => WEEKDAYS[new Date(+ym.slice(0,4), +ym.slice(5,7)-1, day).getDay()];
+    const yearMonthFromDate = (d=new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    
+    const monthBounds = (ym) => {
+      const [y,m] = ym.split('-').map(Number);
+      const days = new Date(y, m, 0).getDate();
+      const pad = n => String(n).padStart(2,'0');
+      return { from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-${pad(days)}`, days };
+    };
+    
+    const shiftYM = (ym, delta) => {
+      const [y,m] = ym.split('-').map(Number);
+      return yearMonthFromDate(new Date(y, m-1+delta, 1));
+    };
+
+    // Helpers Excel
+    const hhmmFromDecimal = (h) => {
+      const total = Math.round(h * 60);
+      return `${Math.floor(total/60).toString().padStart(2,'0')}:${(total%60).toString().padStart(2,'0')}`;
+    };
+
+    const sumHHMM = (arr) => {
+      let mins = 0;
+      arr.forEach(s => {
+        if(s) {
+          const [h,m] = s.split(':').map(n=>parseInt(n||'0',10));
+          mins += (isNaN(h)?0:h)*60 + (isNaN(m)?0:m);
+        }
+      });
+      return `${Math.floor(mins/60).toString().padStart(2,'0')}:${(mins%60).toString().padStart(2,'0')}`;
+    };
+
+    const dayLabels = (ym) => {
+      const [y,m] = ym.split('-').map(Number);
+      const days = new Date(y, m, 0).getDate();
+      return Array.from({length:days}, (_,i) => `${i+1} ${WEEKDAYS[new Date(y, m-1, i+1).getDay()]}`);
+    };
+
+    const entriesByKey = (entries) => {
+      const map = new Map();
+      entries.forEach(e => map.set(`${e.worker_id}|${e.work_date}`, e));
+      return map;
+    };
+
+    // Chargeur XLSX robuste
+    async function ensureXLSX() {
+      if (window.XLSX) return window.XLSX;
+      if (ensureXLSX._p) return ensureXLSX._p;
+
+      ensureXLSX._p = (async ()=>{
+        // Attendre le script existant
+        for (let i = 0; i < 50; i++) {
+          if (window.XLSX) return window.XLSX;
+          await new Promise(r => setTimeout(r, 100));
+        }
+
+        // Fallback CDNs
+        const candidates = [
+          'https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js',
+          'https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js',
+          'https://unpkg.com/xlsx@0.19.3/dist/xlsx.full.min.js'
+        ];
+
+        for (const url of candidates) {
+          try { 
+            await loadScript(url); 
+            if (window.XLSX) return window.XLSX;
+          }
+          catch (e) { console.warn('[XLSX] Failed:', url, e.message); }
+        }
+
+        throw new Error('Could not load XLSX library');
+      })();
+
+      return ensureXLSX._p;
+    }
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.crossOrigin = 'anonymous';
+        const t = setTimeout(() => {
+          s.remove();
+          reject(new Error('Timeout'));
+        }, 10000);
+        s.onload = () => { clearTimeout(t); resolve(); };
+        s.onerror = () => { clearTimeout(t); s.remove(); reject(new Error('Load failed')); };
+        document.head.appendChild(s);
+      });
+    }
+
+    // Hook d'authentification
+    function useAuth(){
+      const [session,setSession]=useState(null);
+      useEffect(()=>{
+        supabase.auth.getSession().then(({data})=>setSession(data.session||null));
+        const { data: sub } = supabase.auth.onAuthStateChange((_e,s)=>setSession(s));
+        return ()=>sub.subscription.unsubscribe();
+      },[]);
+      return { session, user: session?.user || null };
+    }
+
+    // Composant de connexion
+    function SignIn(){
+      const [email,setEmail] = useState('');
+      const [sent,setSent] = useState(false);
+      const [error,setError] = useState('');
+      const [loading,setLoading] = useState(false);
+      const [notWhitelisted, setNotWhitelisted] = useState(false);
+      const codeRefs = Array.from({length:6},()=>useRef(null));
+      const [codeDigits,setCodeDigits] = useState(Array(6).fill(''));
+
+      const requestCode = async (e) => {
+        e.preventDefault(); 
+        setError(''); 
+        setLoading(true);
+        setNotWhitelisted(false);
+
+        try {
+          // Vérifier la whitelist d'abord
+          const { data, error: whitelistError } = await supabase
+            .from('allowed_users')
+            .select('email')
+            .eq('email', email.toLowerCase())
+            .eq('active', true)
+            .single();
+          
+          if (whitelistError || !data) {
+            setLoading(false);
+            setNotWhitelisted(true);
+            return;
+          }
+
+          const { error } = await supabase.auth.signInWithOtp({
+            email,
+            options: { shouldCreateUser:true, emailRedirectTo: location.origin }
+          });
+          
+          setLoading(false);
+          if(error) {
+            setError(error.message);
+          } else { 
+            setSent(true); 
+            setTimeout(()=>codeRefs[0].current?.focus(), 50); 
+          }
+        } catch (err) {
+          setLoading(false);
+          setError('Erreur de vérification. Veuillez réessayer.');
+          console.error('Whitelist check error:', err);
+        }
+      };
+
+      const verifyCode = async (e) => {
+        if(e?.preventDefault) e.preventDefault();
+        setError(''); 
+        setLoading(true);
+        const { error } = await supabase.auth.verifyOtp({ email, token: codeDigits.join(''), type:'email' });
+        setLoading(false);
+        if(error) setError(error.message);
+      };
+
+      // Écran d'accès refusé
+      if (notWhitelisted) {
+        return React.createElement('div',{className:'min-h-screen grid place-items-center p-6'},
+          React.createElement('div',{className:'bg-white border rounded-2xl shadow-sm p-6 w-full max-w-md space-y-5 text-center'},
+            React.createElement('div',{className:'flex justify-center mb-4'},
+              React.createElement('img',{src:'./logo.png',alt:'Chronix logo',className:'h-12 w-auto rounded-xl'})
+            ),
+            React.createElement('div',{className:'space-y-3'},
+              React.createElement('h1',{className:'text-xl font-semibold text-gray-900'},'Accès non autorisé'),
+              React.createElement('p',{className:'text-gray-600'},
+                'Votre adresse e-mail ne fait pas partie des utilisateurs autorisés pour cette application.'
+              ),
+              React.createElement('div',{className:'bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4'},
+                React.createElement('p',{className:'text-sm text-blue-800'},
+                  'Pour demander un accès, veuillez envoyer un e-mail à :'
+                ),
+                React.createElement('a',{
+                  href:'mailto:andrei@tmfcompta.be?subject=Demande d\'accès Chronix Timesheet',
+                  className:'text-blue-600 font-medium hover:underline'
+                }, 'andrei@tmfcompta.be')
+              )
+            ),
+            React.createElement('button',{
+              onClick:()=>{setNotWhitelisted(false);setEmail('');},
+              className:'btn w-full'
+            },'Essayer avec un autre e-mail')
+          )
+        );
+      }
+
+      return React.createElement('div',{className:'min-h-screen grid place-items-center p-6'},
+        React.createElement('div',{className:'bg-white border rounded-2xl shadow-sm p-6 w-full max-w-md space-y-5'},
+          React.createElement('div',{className:'flex items-center gap-3'},
+            React.createElement('img',{src:'./logo.png',alt:'Chronix logo',className:'h-12 w-auto rounded-xl'}),
+            React.createElement('h1',{className:'text-xl font-semibold'}, sent?'Entrez le code':'Connexion')
+          ),
+          !sent ? React.createElement('form',{onSubmit:requestCode,className:'space-y-3'},
+            React.createElement('div',null,
+              React.createElement('label',{htmlFor:'email',className:'text-xs text-gray-500'},'E-mail'),
+              React.createElement('input',{
+                id:'email',
+                type:'email',
+                required:true,
+                value:email,
+                onChange:e=>setEmail(e.target.value),
+                className:'mt-1 w-full px-3 py-2 rounded-xl border',
+                placeholder:'vous@exemple.com'
+              })
+            ),
+            React.createElement('button',{
+              type:'submit',
+              disabled:loading,
+              className:'w-full btn btn-primary'
+            }, loading?'Vérification...':'Recevoir le code')
+          ) : React.createElement('form',{onSubmit:verifyCode,className:'space-y-3'},
+            React.createElement('div',null, 
+              React.createElement('label',{className:'text-xs text-gray-500'},'Code à 6 chiffres')
+            ),
+            React.createElement('div',{className:'flex gap-2 justify-between'},
+              codeRefs.map((r,idx)=>React.createElement('input',{
+                key:idx, 
+                ref:r, 
+                className:'otp-input', 
+                inputMode:'numeric',
+                maxLength:1,
+                value:codeDigits[idx], 
+                onChange:e=>{
+                  const v = e.target.value.replace(/\D/g,'').slice(0,1);
+                  const next = [...codeDigits]; 
+                  next[idx] = v; 
+                  setCodeDigits(next);
+                  if(v && idx<5) codeRefs[idx+1].current?.focus();
+                },
+                onPaste: idx === 0 ? (e) => {
+                  e.preventDefault();
+                  const pastedText = e.clipboardData.getData('text');
+                  const digits = pastedText.replace(/\D/g,'').slice(0,6);
+                  
+                  if(digits.length > 0) {
+                    const newDigits = Array(6).fill('');
+                    for(let i = 0; i < Math.min(digits.length, 6); i++) {
+                      newDigits[i] = digits[i];
+                    }
+                    setCodeDigits(newDigits);
+                    
+                    const nextIndex = Math.min(digits.length, 5);
+                    setTimeout(() => codeRefs[nextIndex].current?.focus(), 10);
+                  }
+                } : undefined,
+                onKeyDown:(e)=>{ 
+                  if(e.key==='Backspace' && !codeDigits[idx] && idx>0){ 
+                    codeRefs[idx-1].current?.focus(); 
+                  } 
+                }
+              }))
+            ),
+            React.createElement('button',{
+              type:'submit',
+              disabled:loading||codeDigits.join('').length<6,
+              className:'w-full btn btn-primary'
+            }, loading?'Vérification...':'Se connecter'),
+            React.createElement('button',{
+              type:'button',
+              onClick:()=>{setSent(false);setCodeDigits(Array(6).fill(''));},
+              className:'text-xs text-gray-500 underline'
+            },'Changer d\'e-mail')
+          ),
+          error && React.createElement('div',{className:'text-sm text-red-600'},error)
+        )
+      );
+    }
+
+    // Modal réutilisable
+    function Modal({ title, onClose, children }){
+      const hasFocused = useRef(false);
+      
+      useEffect(()=>{
+        if (!hasFocused.current) {
+          const el = document.querySelector('[data-autofocus]');
+          el?.focus();
+          hasFocused.current = true;
+        }
+        
+        const onKey = (e) => e.key === 'Escape' && onClose();
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+      },[onClose]);
+      
+      useEffect(() => {
+        return () => {
+          hasFocused.current = false;
+        };
+      }, []);
+      
+      return React.createElement('div',{
+        className:'fixed inset-0 z-50 flex items-center justify-center',
+        role:'dialog',
+        'aria-modal':'true',
+        'aria-labelledby':'modal-title'
+      },
+        React.createElement('div',{ className:'absolute inset-0 bg-black/30', onClick:onClose }),
+        React.createElement('div',{ 
+          className:'relative bg-white rounded-2xl shadow-xl border w-full max-w-lg p-5',
+          onMouseDown:(e)=> e.stopPropagation(),
+          onClick:(e)=> e.stopPropagation(),
+          onKeyDown:(e)=> e.stopPropagation()
+        },
+          React.createElement('div',{className:'flex items-center justify-between mb-3'},
+            React.createElement('h3',{id:'modal-title',className:'text-lg font-semibold'}, title),
+            React.createElement('button',{
+              className:'text-gray-500',
+              onClick:onClose,
+              'aria-label':'Fermer'
+            },'✕')
+          ),
+          children
+        )
+      );
+    }
+
+    // Composant principal
+    function App(){
+      const { user } = useAuth();
+      return user ? React.createElement(Dashboard, { user }) : React.createElement(SignIn);
+    }
+
+    // Dashboard principal
+    function Dashboard({ user }){
+      // Helpers de temps
+      const timeHelpers = useMemo(() => ({
+        decimalToHHMM(h){
+          if (!h || h <= 0) return '';
+          const total = Math.round(h*60);
+          return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+        },
+        
+        hhmmToDecimal(s){
+          if(!s) return 0;
+          if(s.includes(':')){
+            const [h,m] = s.split(':').map(n => parseInt(n) || 0);
+            return Math.min(24, Math.max(0, h + (m/60)));
+          }
+          return Math.min(24, Math.max(0, toNum(s)));
+        },
+        
+        validateTime(value) {
+          if(!value) return '';
+          if(/^\d+$/.test(value)) {
+            const h = Math.min(23, parseInt(value));
+            return `${h}:00`;
+          }
+          if(/^\d{1,2}:\d{0,2}$/.test(value)) {
+            const [h, m] = value.split(':');
+            const hours = Math.min(23, parseInt(h) || 0);
+            const minutes = Math.min(59, parseInt(m) || 0);
+            return `${hours}:${String(minutes).padStart(2,'0')}`;
+          }
+          return value;
+        }
+      }), []);
+
+      // États
+      const [projects,setProjects] = useState([]);
+      const [workers,setWorkers] = useState([]);
+      const [assignedIds,setAssignedIds] = useState([]);
+      const [entries,setEntries] = useState([]);
+      const [allEntries, setAllEntries] = useState([]);
+      const [openWorkers, setOpenWorkers] = useState(false);
+      const [globalTotals, setGlobalTotals] = useState({ hours:0, factu:0, paie:0 });
+      const [projectId,setProjectId] = useState(() => localStorage.getItem('projectId') || null);
+      const [ym,setYM] = useState(() => localStorage.getItem('ym') || yearMonthFromDate());
+      const [editRates, setEditRates] = useState({});
+      const [editingRate, setEditingRate] = useState(null);
+      const [editingCell, setEditingCell] = useState(null);
+      const [editingValue, setEditingValue] = useState('');
+      
+      // États des modals
+      const [modals, setModals] = useState({
+        newProject: false,
+        addWorker: false,
+        projectSettings: false
+      });
+      
+      const [formData, setFormData] = useState({
+        pName:'', pClient:'', pRate:'', pDefaultH:'8', 
+        wName:'', wEmail:'', wPay:''
+      });
+      const [editData, setEditData] = useState({});
+
+      const { from, to, days } = useMemo(()=>monthBounds(ym), [ym]);
+
+      // Préchargement XLSX
+      useEffect(() => { ensureXLSX().catch(()=>{}); }, []);
+
+      // Persistance
+      useEffect(() => { localStorage.setItem('projectId', projectId || ''); }, [projectId]);
+      useEffect(() => { localStorage.setItem('ym', ym); }, [ym]);
+
+      // Synchronisation des taux
+      useEffect(()=>{
+        const map = {};
+        workers.forEach(w => { map[w.id] = String(toNum(w.pay_rate) || ''); });
+        setEditRates(map);
+      }, [workers]);
+
+      // Gestion des modals avec Escape
+      const isModalOpen = Object.values(modals).some(Boolean);
+      useEffect(() => {
+        if (!isModalOpen) return;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = ''; };
+      }, [isModalOpen]);
+
+      // Fonctions modals
+      const openModal = useCallback((modal, initData = {}) => {
+        setModals(prev => ({...prev, [modal]: true}));
+        if(modal === 'newProject') {
+          setFormData(prev => ({...prev, pName:'', pClient:'', pRate:'', pDefaultH:'8'}));
+        } else if(modal === 'addWorker') {
+          setFormData(prev => ({...prev, wName:'', wEmail:'', wPay:''}));
+        } else if(modal === 'projectSettings') {
+          if(!projectId) { alert('Sélectionnez un chantier.'); return; }
+          const p = projects.find(pr => pr.id === projectId);
+          setEditData({
+            pClient: p?.client || '',
+            pRate: String(toNum(p?.bill_rate) || ''),
+            pDefaultH: String(toNum(p?.default_daily_hours) || '8')
+          });
+        }
+      }, [projectId, projects]);
+
+      const closeModal = useCallback((modal) => {
+        setModals(prev => ({...prev, [modal]: false}));
+      }, []);
+
+      // Chargement des données - PATCH APPLIQUÉ: ajout du filtre archived
+      useEffect(()=>{ 
+        const loadData = async () => {
+          const [pj, wk] = await Promise.all([
+            supabase.from('projects')
+              .select('*')
+              .eq('owner',user.id)
+              .eq('archived', false)
+              .order('created_at',{ascending:false}),
+            supabase.from('workers')
+              .select('*')
+              .eq('owner',user.id)
+              .eq('archived', false)
+              .order('created_at',{ascending:false})
+          ]);
+          setProjects(pj.data||[]); 
+          setWorkers(wk.data||[]);
+        };
+        loadData();
+      }, [user.id]);
+
+      useEffect(()=>{ 
+        const loadProjectData = async () => {
+          if(!projectId){ 
+            setAssignedIds([]); 
+            setEntries([]); 
+            return; 
+          }
+          const { data: rel } = await supabase.from('project_workers').select('worker_id').eq('owner',user.id).eq('project_id',projectId);
+          setAssignedIds((rel||[]).map(x=>x.worker_id));
+          await loadEntries();
+        };
+        loadProjectData();
+      }, [user.id, projectId, ym]);
+
+      useEffect(()=>{ 
+        loadGlobalTotals(); 
+        loadAllEntries(); 
+      }, [user.id, ym]);
+
+      const loadEntries = useCallback(async () => {
+        if(!projectId){ setEntries([]); return; }
+        const { data } = await supabase.from('time_entries')
+          .select(`*, worker:workers(*), project:projects(*)`)
+          .eq('owner', user.id)
+          .eq('project_id', projectId)
+          .gte('work_date', from)
+          .lte('work_date', to)
+          .order('work_date');
+        setEntries(data||[]);
+      }, [projectId, user.id, from, to]);
+
+      const loadGlobalTotals = useCallback(async () => {
+        const { from: gFrom, to: gTo } = monthBounds(ym);
+        const { data } = await supabase.from('time_entries')
+          .select(`hours, project:projects(bill_rate), worker:workers(pay_rate)`)
+          .eq('owner', user.id)
+          .gte('work_date', gFrom)
+          .lte('work_date', gTo);
+        let hours=0, factu=0, paie=0;
+        (data||[]).forEach(e=>{
+          const h = toNum(e.hours), br = toNum(e.project?.bill_rate), wr = toNum(e.worker?.pay_rate);
+          hours += h; factu += h * br; paie += h * wr;
+        });
+        setGlobalTotals({ hours, factu, paie });
+      }, [user.id, ym]);
+
+      const loadAllEntries = useCallback(async () => {
+        const { data } = await supabase.from('time_entries')
+          .select(`*, worker:workers(*), project:projects(*)`)
+          .eq('owner', user.id)
+          .gte('work_date', from)
+          .lte('work_date', to);
+        setAllEntries(data||[]);
+      }, [user.id, from, to]);
+
+      // NOUVELLE FONCTION: Supprimer un projet (soft delete)
+      const onDeleteProject = useCallback(async () => {
+        if (!projectId) return;
+        const pj = projects.find(p=>p.id===projectId);
+        const ok = confirm(
+          `⚠️ Suppression définitive\n\n` +
+          `Chantier : ${pj?.name || 'Sans nom'}\n\n` +
+          `• Le chantier sera ARCHIVÉ (retiré de l'UI)\n` +
+          `• Les affectations seront supprimées\n` +
+          `• Les pointages EXISTANTS sont conservés (historique)\n\n` +
+          `Continuer ?`
+        );
+        if (!ok) return;
+
+        // 1) archive le projet
+        let { error } = await supabase
+          .from('projects')
+          .update({ archived: true, deleted_at: new Date().toISOString() })
+          .eq('owner', user.id)
+          .eq('id', projectId);
+        if (error) return alert(error.message);
+
+        // 2) nettoie les affectations
+        await supabase
+          .from('project_workers')
+          .delete()
+          .eq('owner', user.id)
+          .eq('project_id', projectId);
+
+        // 3) refresh UI
+        const { data: pj2 } = await supabase
+          .from('projects')
+          .select('*')
+          .eq('owner', user.id)
+          .eq('archived', false)
+          .order('created_at',{ascending:false});
+        setProjects(pj2 || []);
+        setProjectId(null);
+        closeModal('projectSettings');
+
+        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
+      }, [projectId, projects, user.id, closeModal, loadEntries, loadGlobalTotals, loadAllEntries]);
+
+      // NOUVELLE FONCTION: Supprimer un ouvrier (soft delete)
+      const onDeleteWorker = useCallback(async (w) => {
+        const who = w.full_name || w.email || w.id.slice(0,8);
+        const ok = confirm(
+          `⚠️ Suppression définitive\n\n` +
+          `Ouvrier : ${who}\n\n` +
+          `• L'ouvrier sera ARCHIVÉ (retiré de l'UI)\n` +
+          `• Il sera retiré des affectations\n` +
+          `• Les pointages EXISTANTS sont conservés (historique)\n\n` +
+          `Continuer ?`
+        );
+        if (!ok) return;
+
+        // 1) archive l'ouvrier
+        let { error } = await supabase
+          .from('workers')
+          .update({ archived: true, deleted_at: new Date().toISOString() })
+          .eq('owner', user.id)
+          .eq('id', w.id);
+        if (error) return alert(error.message);
+
+        // 2) retire des affectations
+        await supabase
+          .from('project_workers')
+          .delete()
+          .eq('owner', user.id)
+          .eq('worker_id', w.id);
+
+        // 3) refresh UI
+        const { data: wk2 } = await supabase
+          .from('workers')
+          .select('*')
+          .eq('owner', user.id)
+          .eq('archived', false)
+          .order('created_at',{ascending:false});
+        setWorkers(wk2 || []);
+
+        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
+      }, [user.id, loadEntries, loadGlobalTotals, loadAllEntries]);
+
+      // Gestion des taux ouvriers
+      const startEditRate = useCallback((worker) => {
+        setEditRates(prev => ({...prev, [worker.id]: String(toNum(worker.pay_rate) || '')}));
+        setEditingRate(worker.id);
+      }, []);
+
+      const cancelEditRate = useCallback(() => {
+        setEditingRate(null);
+        const map = {};
+        workers.forEach(w => { map[w.id] = String(toNum(w.pay_rate) || ''); });
+        setEditRates(map);
+      }, [workers]);
+
+      const saveWorkerRate = useCallback(async (workerId) => {
+        const value = toNum(editRates[workerId]);
+        const { error } = await supabase
+          .from('workers')
+          .update({ pay_rate: value })
+          .eq('id', workerId)
+          .eq('owner', user.id);
+        if(error) return alert(error.message);
+
+        // PATCH APPLIQUÉ: ajout du filtre archived
+        const { data: wk } = await supabase
+          .from('workers')
+          .select('*')
+          .eq('owner', user.id)
+          .eq('archived', false)
+          .order('created_at',{ascending:false});
+        setWorkers(wk||[]);
+        setEditingRate(null);
+        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
+      }, [editRates, user.id, loadEntries, loadGlobalTotals, loadAllEntries]);
+
+      // Actions CRUD
+      const createProject = useCallback(async (e) => {
+        e.preventDefault();
+        const { data, error } = await supabase.from('projects').insert({
+          owner:user.id, 
+          name:formData.pName, 
+          client:formData.pClient||null, 
+          bill_rate: toNum(formData.pRate), 
+          default_daily_hours: toNum(formData.pDefaultH)||8
+        }).select().single();
+        if(error) return alert(error.message);
+        setProjects([data, ...projects]); 
+        setProjectId(data.id);
+        closeModal('newProject');
+      }, [formData, user.id, projects, closeModal]);
+
+      const updateProject = useCallback(async (e) => {
+        e.preventDefault();
+        const { error } = await supabase.from('projects').update({
+          client: editData.pClient||null,
+          bill_rate: toNum(editData.pRate), 
+          default_daily_hours: toNum(editData.pDefaultH)||8
+        }).eq('id', projectId).eq('owner', user.id);
+        if(error) return alert(error.message);
+        
+        // PATCH APPLIQUÉ: ajout du filtre archived
+        const { data: pj } = await supabase.from('projects')
+          .select('*')
+          .eq('owner',user.id)
+          .eq('archived', false)
+          .order('created_at',{ascending:false});
+        setProjects(pj || []);
+        closeModal('projectSettings');
+        await Promise.all([loadEntries(), loadGlobalTotals()]);
+      }, [editData, projectId, user.id, closeModal, loadEntries, loadGlobalTotals]);
+
+      const createWorker = useCallback(async (e) => {
+        e.preventDefault();
+        const { data, error } = await supabase.from('workers').insert({
+          owner:user.id, 
+          full_name:formData.wName, 
+          email:formData.wEmail||null, 
+          pay_rate: toNum(formData.wPay)
+        }).select().single();
+        if(error) return alert(error.message);
+        setWorkers([data, ...workers]); 
+        closeModal('addWorker');
+      }, [formData, user.id, workers, closeModal]);
+
+      const toggleAssign = useCallback(async (workerId, checked) => {
+        if(!projectId) return;
+        const query = checked 
+          ? supabase.from('project_workers').insert({ owner:user.id, project_id:projectId, worker_id:workerId })
+          : supabase.from('project_workers').delete().eq('owner',user.id).eq('project_id',projectId).eq('worker_id',workerId);
+        const { error } = await query;
+        if(error) return alert(error.message);
+        setAssignedIds(prev => checked ? [...new Set([...prev, workerId])] : prev.filter(id => id !== workerId));
+      }, [projectId, user.id]);
+
+      // Timesheet logic
+      const assignedWorkers = useMemo(()=>workers.filter(w => assignedIds.includes(w.id)), [workers, assignedIds]);
+      
+      const byWorkerDate = useMemo(()=>{
+        const map = {};
+        entries.forEach(e => map[`${e.worker_id}|${e.work_date}`] = e);
+        return map;
+      }, [entries]);
+
+      const totalsByWorker = useMemo(()=>{
+        const t={}; 
+        entries.forEach(e=>{ t[e.worker_id]=(t[e.worker_id]||0)+toNum(e.hours); });
+        return t;
+      }, [entries]);
+
+      const totals = useMemo(()=>{
+        let hours = 0, factu = 0, paie = 0;
+        entries.forEach(e=>{
+          const h = toNum(e.hours), br = toNum(e.project?.bill_rate), wr = toNum(e.worker?.pay_rate);
+          hours += h; factu += h*br; paie += h*wr;
+        });
+        return { hours, factu, paie };
+      }, [entries]);
+
+      const upsertEntry = useCallback(async (workerId, day, patch) => {
+        if(!projectId) return;
+        const [y,m] = ym.split('-').map(Number);
+        const iso = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+        const current = byWorkerDate[`${workerId}|${iso}`];
+        const record = {
+          owner: user.id, 
+          project_id: projectId, 
+          worker_id: workerId, 
+          work_date: iso,
+          hours: current?.hours || 0, 
+          status: current?.status || 'worked', 
+          note: current?.note || null,
+          ...patch
+        };
+        const { error } = await supabase.from('time_entries').upsert(record, { onConflict: 'owner,project_id,worker_id,work_date' });
+        if(error) return alert(error.message);
+        await Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]);
+      }, [projectId, ym, byWorkerDate, user.id, loadEntries, loadGlobalTotals, loadAllEntries]);
+
+      const setHours = useCallback((workerId, day, val) => {
+        let h = typeof val === 'string' && val.includes(':') ? timeHelpers.hhmmToDecimal(val) : toNum(val);
+        h = Math.max(0, Math.min(24, h));
+        upsertEntry(workerId, day, { hours: h, status: h>0 ? 'worked' : 'absent' });
+      }, [upsertEntry, timeHelpers]);
+
+      const toggleStatus = useCallback((workerId, day) => {
+        const [y,m] = ym.split('-').map(Number);
+        const iso = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+        const current = byWorkerDate[`${workerId}|${iso}`];
+        const nextStatus = (current?.status === 'worked') ? 'absent' : 'worked';
+        const hours = nextStatus === 'worked' ? (projects.find(p=>p.id===projectId)?.default_daily_hours || 8) : 0;
+        upsertEntry(workerId, day, { status: nextStatus, hours });
+      }, [ym, byWorkerDate, projects, projectId, upsertEntry]);
+
+      // Exports
+      const exportPaieXlsx = useCallback(async (entries, ym) => {
+        try{
+          if (typeof XLSX === 'undefined') await ensureXLSX();
+          const map = new Map();
+          entries.forEach(e=>{
+            const name = e.worker?.full_name || e.worker?.email || e.worker_id;
+            const h = toNum(e.hours), p = toNum(e.worker?.pay_rate ?? 0);
+            const cur = map.get(name) || { minutes:0, taux:p, montant:0 };
+            cur.minutes += Math.round(h*60); 
+            cur.montant += h*p; 
+            cur.taux = p || cur.taux;
+            map.set(name, cur);
+          });
+          
+          const rows = Array.from(map.entries())
+            .sort((a,b)=>b[1].montant - a[1].montant)
+            .map(([name,v])=>({
+              Ouvrier: name,
+              Heures: hhmmFromDecimal(v.minutes/60),
+              Taux: +toNum(v.taux).toFixed(2),
+              Montant: +toNum(v.montant).toFixed(2)
+            }));
+          
+          if(!rows.length) rows.push({Ouvrier:'—', Heures:'00:00', Taux:null, Montant:0});
+          
+          const totalH = hhmmFromDecimal(rows.reduce((s,r)=>{
+            const [h,m]=String(r.Heures).split(':').map(Number); 
+            return s + (h*60+m)/60;
+          },0));
+          const totalM = +rows.reduce((s,r)=>s + Number(r.Montant||0),0).toFixed(2);
+          rows.push({ Ouvrier:'TOTAL', Heures: totalH, Taux: null, Montant: totalM });
+
+          const ws = XLSX.utils.json_to_sheet(rows, { header:['Ouvrier','Heures','Taux','Montant'] });
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'Paie');
+          XLSX.writeFile(wb, `paie_${ym}.xlsx`);
+        }catch(err){
+          console.error(err);
+          alert('Export Paie : une erreur est survenue.');
+        }
+      }, []);
+
+      const exportDetailXlsx = useCallback(async ({ ym, projectId, projects, workers, entries, allEntries }) => {
+        try{
+          if (typeof XLSX === 'undefined') await ensureXLSX();
+          const wb = XLSX.utils.book_new();
+          const labels = dayLabels(ym);
+          const days = monthBounds(ym).days;
+
+          function buildSheet(sheetName, sheetEntries, sheetWorkers){
+            const byKey = entriesByKey(sheetEntries);
+            const header = ['Ouvrier', ...labels, 'Total'];
+            const data = [header];
+
+            sheetWorkers.forEach(w=>{
+              const row = Array(header.length).fill(null);
+              row[0] = w.full_name || w.email || w.id.slice(0,8);
+              const line = [];
+              for(let d=1; d<=days; d++){
+                const [y,m]=ym.split('-').map(Number);
+                const iso = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                const e = byKey.get(`${w.id}|${iso}`);
+                const h = e ? toNum(e.hours) : 0;
+                const s = h>0 ? hhmmFromDecimal(h) : '';
+                row[d] = s; 
+                line.push(s);
+              }
+              row[header.length-1] = sumHHMM(line);
+              data.push(row);
+            });
+
+            const totalRow = Array(header.length).fill(null);
+            totalRow[0] = 'TOTAL';
+            for(let d=1; d<=days; d++){
+              const col = data.slice(1).map(r=>r[d]).filter(Boolean);
+              totalRow[d] = sumHHMM(col);
+            }
+            totalRow[header.length-1] = sumHHMM(data.slice(1).map(r=>r[header.length-1]));
+            data.push(totalRow);
+
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            ws['!cols'] = [{wch:24}, ...Array(days).fill({wch:7}), {wch:10}];
+            ws['!freeze'] = { xSplit:1, ySplit:1 };
+            XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0,31));
+          }
+
+          if(projectId){
+            const p = projects.find(p=>p.id===projectId);
+            const name = p ? (p.name || 'Chantier') : 'Chantier';
+            const setIds = new Set(entries.map(e=>e.worker_id));
+            buildSheet(`Chantier - ${name}`, entries, workers.filter(w=>setIds.has(w.id)));
+          }else{
+            const byProject = new Map();
+            allEntries.forEach(e=>{
+              if(!byProject.has(e.project_id)) byProject.set(e.project_id, []);
+              byProject.get(e.project_id).push(e);
+            });
+            if(!byProject.size){
+              buildSheet('Chantiers', [], workers);
+            }else{
+              byProject.forEach((arr, pid)=>{
+                const p = projects.find(pp=>pp.id===pid);
+                const name = p ? (p.name || 'Chantier') : 'Chantier';
+                const wids = new Set(arr.map(e=>e.worker_id));
+                buildSheet(`Chantier - ${name}`, arr, workers.filter(w=>wids.has(w.id)));
+              });
+            }
+          }
+          XLSX.writeFile(wb, `detail_${ym}.xlsx`);
+        }catch(err){
+          console.error(err);
+          alert('Export Détaillé : une erreur est survenue.');
+        }
+      }, []);
+
+      const logout = useCallback(async () => { 
+        await supabase.auth.signOut(); 
+      }, []);
+
+      return React.createElement('div',{className:'min-h-screen'},
+        // Header
+        React.createElement('header',{className:'sticky top-0 z-10 bg-white/80 backdrop-blur border-b'},
+          React.createElement('div',{className:'max-w-7xl mx-auto px-4 py-3 flex justify-between items-center'},
+            React.createElement('div',{className:'flex items-center gap-3'},
+              React.createElement('img',{src:'./logo.png',alt:'Chronix logo',className:'h-10 w-auto rounded-xl'}),
+              React.createElement('div',null,
+                React.createElement('div',{className:'text-lg font-semibold'},'Chronix — Timesheet'),
+                React.createElement('div',{className:'text-xs text-gray-500'},
+                  `(Global) Heures: ${globalTotals.hours.toFixed(2)} · Factu: ${globalTotals.factu.toFixed(2)} € · Paie: ${globalTotals.paie.toFixed(2)} €`
+                )
+              )
+            ),
+            React.createElement('button',{onClick:logout,className:'btn'},'Déconnexion')
+          )
+        ),
+
+        // Modals
+        modals.newProject && React.createElement(Modal,{
+          title:'Nouveau chantier', 
+          onClose:()=>closeModal('newProject')
+        },
+          React.createElement('form',{onSubmit:createProject, className:'grid grid-cols-2 gap-3'},
+            React.createElement('input',{ 
+              'data-autofocus':true, 
+              placeholder:'Nom du chantier',
+              value:formData.pName,
+              onChange:e=>setFormData(prev=>({...prev, pName: e.target.value})), 
+              required:true, 
+              className:'px-3 py-2 rounded-xl border col-span-2',
+              autoComplete:"off",
+              autoCorrect:"off",
+              spellCheck:"false",
+              inputMode:"text"
+            }),
+            React.createElement('input',{ 
+              placeholder:'Client',
+              value:formData.pClient,
+              onChange:e=>setFormData(prev=>({...prev, pClient: e.target.value})), 
+              className:'px-3 py-2 rounded-xl border',
+              autoComplete:"off",
+              autoCorrect:"off",
+              spellCheck:"false",
+              inputMode:"text"
+            }),
+            React.createElement('input',{ 
+              placeholder:'Taux €/h',
+              value:formData.pRate,
+              onChange:e=>setFormData(prev=>({...prev, pRate: e.target.value})), 
+              className:'px-3 py-2 rounded-xl border',
+              autoComplete:"off",
+              inputMode:"decimal",
+              pattern:"[0-9]*[.,]?[0-9]*"
+            }),
+            React.createElement('input',{ 
+              placeholder:'Heures/jour défaut',
+              value:formData.pDefaultH,
+              onChange:e=>setFormData(prev=>({...prev, pDefaultH: e.target.value})), 
+              className:'px-3 py-2 rounded-xl border col-span-2',
+              autoComplete:"off",
+              inputMode:"decimal",
+              pattern:"[0-9]*[.,]?[0-9]*"
+            }),
+            React.createElement('button',{
+              type:'submit',
+              className:'col-span-2 btn btn-primary'
+            },'Créer')
+          )
+        ),
+
+        modals.addWorker && React.createElement(Modal,{
+          title:'Ajouter un ouvrier', 
+          onClose:()=>closeModal('addWorker')
+        },
+          React.createElement('form',{onSubmit:createWorker, className:'grid grid-cols-2 gap-3'},
+            React.createElement('input',{ 
+              'data-autofocus':true, 
+              placeholder:'Nom complet',
+              value:formData.wName,
+              onChange:e=>setFormData(prev=>({...prev, wName: e.target.value})),
+              required:true,
+              className:'px-3 py-2 rounded-xl border col-span-2',
+              autoComplete:"off",
+              autoCorrect:"off",
+              spellCheck:"false",
+              inputMode:"text"
+            }),
+            React.createElement('input',{ 
+              placeholder:'Email (optionnel)',
+              value:formData.wEmail,
+              onChange:e=>setFormData(prev=>({...prev, wEmail: e.target.value})),
+              className:'px-3 py-2 rounded-xl border col-span-2',
+              autoComplete:"off",
+              inputMode:"email"
+            }),
+            React.createElement('input',{ 
+              placeholder:'Taux €/h',
+              value:formData.wPay,
+              onChange:e=>setFormData(prev=>({...prev, wPay: e.target.value})),
+              className:'px-3 py-2 rounded-xl border col-span-2',
+              autoComplete:"off",
+              inputMode:"decimal",
+              pattern:"[0-9]*[.,]?[0-9]*"
+            }),
+            React.createElement('button',{
+              type:'submit',
+              className:'col-span-2 btn btn-primary'
+            },'Ajouter')
+          )
+        ),
+
+        modals.projectSettings && React.createElement(Modal,{
+          title:'Paramètres du chantier', 
+          onClose:()=>closeModal('projectSettings')
+        },
+          React.createElement('form',{onSubmit:updateProject, className:'grid grid-cols-2 gap-3'},
+            React.createElement('input',{ 
+              'data-autofocus':true, 
+              placeholder:'Client',
+              value:editData.pClient,
+              onChange:e=>setEditData(prev=>({...prev, pClient: e.target.value})), 
+              className:'px-3 py-2 rounded-xl border col-span-2',
+              autoComplete:"off",
+              autoCorrect:"off",
+              spellCheck:"false",
+              inputMode:"text"
+            }),
+            React.createElement('input',{ 
+              placeholder:'Taux €/h',
+              value:editData.pRate,
+              onChange:e=>setEditData(prev=>({...prev, pRate: e.target.value})), 
+              className:'px-3 py-2 rounded-xl border',
+              autoComplete:"off",
+              inputMode:"decimal",
+              pattern:"[0-9]*[.,]?[0-9]*"
+            }),
+            React.createElement('input',{ 
+              placeholder:'Heures/jour défaut',
+              value:editData.pDefaultH,
+              onChange:e=>setEditData(prev=>({...prev, pDefaultH: e.target.value})), 
+              className:'px-3 py-2 rounded-xl border',
+              autoComplete:"off",
+              inputMode:"decimal",
+              pattern:"[0-9]*[.,]?[0-9]*"
+            }),
+            React.createElement('button',{
+              type:'submit',
+              className:'col-span-2 btn btn-primary'
+            },'Mettre à jour'),
+            // NOUVEAU: Bouton supprimer chantier
+            React.createElement('button',{
+              type:'button',
+              onClick:onDeleteProject,
+              className:'col-span-2 btn border-red-200 text-red-600 hover:bg-red-50'
+            },'Supprimer définitivement ce chantier')
+          )
+        ),
+
+        // Toolbar
+        React.createElement('section',{className:'bg-white/90 border-b'},
+          React.createElement('div',{className:'max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap justify-between'},
+            React.createElement('div',{className:'flex items-center gap-2'},
+              React.createElement('label',{htmlFor:'project-select',className:'text-xs text-gray-500 mr-1'},'Chantier'),
+              React.createElement('select',{
+                id:'project-select',
+                value:projectId||'',
+                onChange:e=>setProjectId(e.target.value||null),
+                className:'px-3 py-1.5 rounded-xl border bg-white'
+              },
+                [React.createElement('option',{key:'',value:''},'— Sélectionner —')].concat(
+                  projects.map(p=>React.createElement('option',{key:p.id,value:p.id}, p.name))
+                )
+              ),
+              React.createElement('button',{
+                className:'btn',
+                onClick:()=>openModal('newProject'),
+                'aria-label':'Nouveau chantier'
+              },'+'),
+              projectId && React.createElement('button',{
+                className:'btn',
+                onClick:()=>openModal('projectSettings'),
+                'aria-label':'Paramètres du chantier'
+              },'⚙')
+            ),
+            React.createElement('div',{className:'flex items-center gap-2'},
+              React.createElement('label',{htmlFor:'period-input',className:'text-xs text-gray-500 mr-1'},'Période'),
+              React.createElement('button',{
+                className:'px-2 py-1 rounded-lg border',
+                onClick:()=>setYM(shiftYM(ym,-1)),
+                'aria-label':'Mois précédent'
+              },'‹'),
+              React.createElement('input',{
+                id:'period-input',
+                type:'month',
+                value:ym,
+                onChange:e=>setYM(e.target.value),
+                className:'px-3 py-1.5 rounded-xl border bg-white'
+              }),
+              React.createElement('button',{
+                className:'px-2 py-1 rounded-lg border',
+                onClick:()=>setYM(shiftYM(ym,1)),
+                'aria-label':'Mois suivant'
+              },'›'),
+              React.createElement('div',{className:'w-px h-6 bg-gray-200 mx-2'}),
+              React.createElement('button',{
+                onClick:()=>exportPaieXlsx(projectId ? entries : allEntries, ym), 
+                className:'btn'
+              },'💶 Paie'),
+              React.createElement('button',{
+                onClick:()=>exportDetailXlsx({ym, projectId, projects, workers, entries, allEntries}), 
+                className:'btn'
+              },'🧾 Détaillé')
+            )
+          )
+        ),
+
+        // Stats
+        React.createElement('section',{className:'bg-white border-b'},
+          React.createElement('div',{className:'max-w-7xl mx-auto px-4 py-4 grid sm:grid-cols-3 gap-3'},
+            React.createElement('div',{className:'card'},
+              React.createElement('div',{className:'text-xs text-gray-500 flex items-center gap-2'},
+                React.createElement('span',null,'Heures'),
+                React.createElement('span',{className:'text-[10px] text-gray-400'}, 
+                  projectId ? '(chantier)' : '(sélectionnez un chantier)')
+              ),
+              React.createElement('div',{className:'text-2xl font-semibold mt-1'}, 
+                totals.hours.toFixed(2), " h")
+            ),
+            React.createElement('div',{className:'card'},
+              React.createElement('div',{className:'text-xs text-gray-500'}, "Facturation estimée"),
+              React.createElement('div',{className:'text-2xl font-semibold mt-1'}, 
+                totals.factu.toFixed(2), " €")
+            ),
+            React.createElement('div',{className:'card'},
+              React.createElement('div',{className:'text-xs text-gray-500'}, "Paie estimée"),
+              React.createElement('div',{className:'text-2xl font-semibold mt-1'}, 
+                totals.paie.toFixed(2), " €")
+            )
+          )
+        ),
+
+        // Main
+        React.createElement('main',{className:'max-w-7xl mx-auto p-4 space-y-6'},
+          // Ouvriers
+          React.createElement('section',{className:'bg-white rounded-2xl border shadow-sm'},
+            React.createElement('div',{
+              className:'px-4 py-3 border-b flex items-center gap-3 cursor-pointer select-none', 
+              onClick:()=>setOpenWorkers(v=>!v),
+              role:'button',
+              'aria-expanded': openWorkers,
+              'aria-controls': 'workers-panel'
+            },
+              React.createElement('h2',{className:'font-semibold'},'Ouvriers'),
+              React.createElement('div',{className:'ml-auto text-xs text-gray-500'}, 
+                `${workers.length} ouvrier(s)`),
+              React.createElement('button',{
+                type:'button', 
+                onClick:(e)=>{ e.stopPropagation(); openModal('addWorker'); },
+                className:'ml-3 btn'
+              }, 'Ajouter'),
+              React.createElement('span',{className:'text-gray-400','aria-hidden':'true'}, 
+                openWorkers ? '▾' : '▸')
+            ),
+            openWorkers && React.createElement('div',{id:'workers-panel',className:'p-4'},
+              !projectId ? React.createElement('div',{className:'text-sm text-gray-500'},
+                'Sélectionnez un chantier pour gérer les affectations.')
+              : workers.length ? React.createElement('ul',{className:'text-sm divide-y'},
+                  workers.map(w => React.createElement('li',{key:w.id,className:'py-2 flex items-center gap-3'},
+                    React.createElement('div',{className:'min-w-0 flex-1'},
+                      React.createElement('div',{className:'font-medium truncate'},
+                        w.full_name || w.email || w.id.slice(0,8)
+                      ),
+                      w.email ? React.createElement('div',{className:'text-xs text-gray-500 truncate'}, w.email) : null
+                    ),
+                    React.createElement('div',{className:'flex items-center gap-2'},
+                      (editingRate === w.id)
+                      ? React.createElement(React.Fragment, null,
+                          React.createElement('input',{
+                            className:'w-24 px-2 py-1 rounded-lg border text-right',
+                            autoFocus:true,
+                            value:(editRates[w.id] ?? '').toString(),
+                            onChange:(e)=>setEditRates(s=>({...s,[w.id]: e.target.value})),
+                            onKeyDown:(e)=>{
+                              if(e.key === 'Enter'){
+                                e.preventDefault();
+                                saveWorkerRate(w.id);
+                              } else if(e.key === 'Escape'){
+                                cancelEditRate();
+                              }
+                            }
+                          }),
+                          React.createElement('span',null,'€/h'),
+                          React.createElement('button',{
+                            className:'px-2 py-1 rounded-lg border hover:bg-gray-50',
+                            onClick:()=>saveWorkerRate(w.id),
+                            'aria-label':'Valider'
+                          }, '✓'),
+                          React.createElement('button',{
+                            className:'px-2 py-1 rounded-lg border hover:bg-gray-50',
+                            onClick:cancelEditRate,
+                            'aria-label':'Annuler'
+                          }, '✖')
+                        )
+                      : React.createElement('button',{
+                          className:'px-2 py-1 rounded-lg border bg-white hover:bg-gray-50 whitespace-nowrap',
+                          onClick:()=>startEditRate(w),
+                          'aria-label':`Modifier le taux de ${w.full_name || w.email}`
+                        }, `${toNum(w.pay_rate).toFixed(2)} €/h`),
+                      React.createElement('label',{className:'ml-2 flex items-center gap-2'},
+                        React.createElement('input',{
+                          type:'checkbox',
+                          checked: assignedIds.includes(w.id),
+                          onChange: e=>toggleAssign(w.id, e.target.checked),
+                          'aria-label':`Affecter ${w.full_name || w.email} au chantier`
+                        }),
+                        React.createElement('span',null,'Affecté')
+                      ),
+                      React.createElement('button',{
+                        className:'p-2 rounded-lg border hover:bg-red-50 hover:border-red-300 text-red-600',
+                        title:'Supprimer définitivement cet ouvrier',
+                        onClick: ()=>onDeleteWorker(w),
+                        'aria-label':`Supprimer définitivement ${w.full_name || w.email}`
+                      }, '🗑️')
+                    )
+                  ))
+                ) : React.createElement('div',{className:'text-sm text-gray-500'},'Aucun ouvrier.')
+            )
+          ),
+
+          // Timesheet
+          React.createElement('section',{className:'bg-white rounded-2xl border shadow-sm'},
+            React.createElement('div',{className:'px-4 py-3 border-b flex items-center gap-3'},
+              React.createElement('h2',{className:'font-semibold'},'Timesheet (', ym, ')'),
+              !projectId && React.createElement('div',{
+                className:'text-sm text-red-600',
+                role:'alert'
+              },'Sélectionnez un chantier.')
+            ),
+            React.createElement('div',{className:'p-4 overflow-auto'},
+              (projectId && assignedWorkers.length) ? React.createElement('table',{
+                className:'w-full text-sm border-separate border-spacing-y-1',
+                role:'table',
+                'aria-label':'Feuille de temps'
+              },
+                React.createElement('thead',null,
+                  React.createElement('tr',{className:'text-left text-gray-500 border-b'},
+                    React.createElement('th',{className:'py-2 pr-2 w-56',scope:'col'},'Ouvrier'),
+                    Array.from({length:days}, (_,i)=>i+1).map(d =>
+                      React.createElement('th',{
+                        key:d,
+                        className:'py-2 pr-2 cell',
+                        scope:'col'
+                      },
+                        React.createElement('div',{className:'flex flex-col items-center leading-tight'},
+                          React.createElement('div',{className:'font-medium'}, d),
+                          React.createElement('div',{className:'text-[10px] text-gray-500 mt-0.5'}, 
+                            weekdayLabel(ym, d))
+                        )
+                      )
+                    )
+                  )
+                ),
+                React.createElement('tbody',null,
+                  assignedWorkers.map(w => React.createElement('tr',{
+                    key:w.id,
+                    className:'border-b last:border-none align-middle'
+                  },
+                    React.createElement('td',{className:'py-2 pr-2 w-56 sticky-name rounded-l-xl'},
+                      React.createElement('div',{className:'font-semibold truncate'}, 
+                        w.full_name || w.email || w.id.slice(0,8)),
+                      React.createElement('div',{className:'text-xs text-gray-500 mt-0.5'},
+                        'Total: ', (totalsByWorker[w.id]||0).toFixed(2), ' h'
+                      )
+                    ),
+                    Array.from({length:days}, (_,i)=>i+1).map(day=>{
+                      const [y,m] = ym.split('-').map(Number);
+                      const iso = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+                      const e = byWorkerDate[`${w.id}|${iso}`];
+                      const status = e?.status || 'absent';
+                      const hours = e?.hours ?? 0;
+                      const wd = weekdayLabel(ym, day);
+                      const weekend = (wd==='Sam' || wd==='Dim');
+                      
+                      const cellKey = `${w.id}|${day}`;
+                      const isEditing = editingCell === cellKey;
+                      const displayValue = isEditing ? editingValue : timeHelpers.decimalToHHMM(hours);
+                      
+                      return React.createElement('td',{
+                        key:day,
+                        className:`py-2 pr-2 cell ${weekend ? 'bg-gray-150' : ''}`
+                      },
+                        React.createElement('div',{className:'flex flex-col items-center gap-1'},
+                          React.createElement('input',{
+                            type: 'text',
+                            className:'px-2 py-1 rounded-lg border text-center w-16',
+                            value: displayValue,
+                            placeholder: '0:00',
+                            'aria-label': `Heures pour ${w.full_name || w.email} jour ${day}`,
+                            onFocus: (ev) => {
+                              setEditingCell(cellKey);
+                              setEditingValue(timeHelpers.decimalToHHMM(hours));
+                              ev.target.select();
+                            },
+                            onChange: (ev) => {
+                              const value = ev.target.value.replace(/[^\d:]/g, '');
+                              setEditingValue(value);
+                            },
+                            onKeyDown: (ev) => {
+                              if(ev.key === 'Enter' || ev.key === 'Tab') {
+                                ev.preventDefault();
+                                const formatted = timeHelpers.validateTime(editingValue);
+                                const decimal = timeHelpers.hhmmToDecimal(formatted || editingValue);
+                                setHours(w.id, day, decimal);
+                                if(decimal > 0) {
+                                  upsertEntry(w.id, day, { hours: decimal, status: 'worked' });
+                                } else {
+                                  upsertEntry(w.id, day, { hours: 0, status: 'absent' });
+                                }
+                                setEditingCell(null);
+                                setEditingValue('');
+                              } else if(ev.key === 'Escape') {
+                                setEditingCell(null);
+                                setEditingValue('');
+                              }
+                            },
+                            onBlur: (ev) => {
+                              if(isEditing) {
+                                const formatted = timeHelpers.validateTime(editingValue);
+                                const decimal = timeHelpers.hhmmToDecimal(formatted || editingValue);
+                                if(decimal > 0) {
+                                  setHours(w.id, day, decimal);
+                                  upsertEntry(w.id, day, { hours: decimal, status: 'worked' });
+                                } else if(editingValue === '') {
+                                  setHours(w.id, day, 0);
+                                  upsertEntry(w.id, day, { hours: 0, status: 'absent' });
+                                }
+                                setEditingCell(null);
+                                setEditingValue('');
+                              }
+                            }
+                          }),
+                          React.createElement('button',{
+                            className:`badge ${status==='worked'?'bg-emerald-50':'bg-gray-50'}`,
+                            onClick: ()=> toggleStatus(w.id, day),
+                            'aria-label': `${status} - cliquer pour changer`
+                          }, status==='worked' ? 'Travaillé' : 'Absent')
+                        )
+                      );
+                    })
+                  ))
+                )
+              ) : React.createElement('div',{className:'text-sm text-gray-500'},
+                projectId ? 'Aucun ouvrier affecté à ce chantier.' : 'Sélectionnez un chantier.'
+              )
+            )
+          )
+        )
+      );
+    }
+
+    // Initialisation
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
