@@ -76,13 +76,15 @@ const SignIn = () => {
 
   if (notWhitelisted) {
     return (
-      <div className="min-h-screen grid place-items-center p-6">
+      <main className="min-h-screen grid place-items-center p-6" aria-labelledby="access-denied-heading">
         <div className="bg-white border rounded-2xl shadow-sm p-6 w-full max-w-md space-y-5 text-center">
           <div className="flex justify-center mb-4">
             <img src="./logo.png" alt="Chronix logo" className="h-12 w-auto rounded-xl" />
           </div>
           <div className="space-y-3">
-            <h1 className="text-xl font-semibold text-gray-900">Accès non autorisé</h1>
+            <h1 id="access-denied-heading" className="text-xl font-semibold text-gray-900">
+              Accès non autorisé
+            </h1>
             <p className="text-gray-600">
               Votre adresse e-mail ne fait pas partie des utilisateurs autorisés pour cette application.
             </p>
@@ -100,16 +102,18 @@ const SignIn = () => {
             Essayer avec un autre e-mail
           </button>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen grid place-items-center p-6">
+    <main className="min-h-screen grid place-items-center p-6" aria-labelledby="sign-in-heading">
       <div className="bg-white border rounded-2xl shadow-sm p-6 w-full max-w-md space-y-5">
         <div className="flex items-center gap-3">
           <img src="./logo.png" alt="Chronix logo" className="h-12 w-auto rounded-xl" />
-          <h1 className="text-xl font-semibold">{sent ? 'Entrez le code' : 'Connexion'}</h1>
+          <h1 id="sign-in-heading" className="text-xl font-semibold">
+            {sent ? 'Entrez le code' : 'Connexion'}
+          </h1>
         </div>
         {!sent ? (
           <form onSubmit={handleRequestCode} className="space-y-3">
@@ -192,9 +196,13 @@ const SignIn = () => {
             </button>
           </form>
         )}
-        {error && <div className="text-sm text-red-600">{error}</div>}
+        {error && (
+          <div className="text-sm text-red-600" role="alert">
+            {error}
+          </div>
+        )}
       </div>
-    </div>
+    </main>
   );
 };
 

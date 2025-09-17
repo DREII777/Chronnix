@@ -71,14 +71,19 @@ body {
   background-color: #f9fafb;
 }
 
+.btn:focus-visible {
+  outline: 2px solid #166534;
+  outline-offset: 2px;
+}
+
 .btn-primary {
-  background: #16a34a;
+  background: #166534;
   color: #fff;
-  border-color: #16a34a;
+  border-color: #166534;
 }
 
 .btn-primary:hover {
-  background: #0d7a39;
+  background: #14532d;
 }
 
 .btn-danger {

@@ -26,7 +26,9 @@ export const exportPayrollXlsx = async (entries: TimeEntry[], yearMonth: string)
     summary.set(workerName, current);
   });
 
-  const rows = Array.from(summary.entries())
+  type PayrollRow = { Ouvrier: string; Heures: string; Taux: number | null; Montant: number };
+
+  const rows: PayrollRow[] = Array.from(summary.entries())
     .sort((a, b) => b[1].amount - a[1].amount)
     .map(([name, value]) => ({
       Ouvrier: name,
