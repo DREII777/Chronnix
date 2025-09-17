@@ -7,9 +7,4 @@ declare global {
   }
 }
 
-declare module '*.svg' {
-  const src: string;
-  export default src;
-}
-
 export {};
