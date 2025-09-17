@@ -21,6 +21,21 @@ const Dashboard = ({ user }: DashboardProps) => {
     <div className="min-h-screen">
       <Header totals={state.globalTotals} onLogout={state.logout} />
 
+      {state.feedback ? (
+        <div
+          className={`${state.feedback.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'} border-b`}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="max-w-7xl mx-auto px-4 py-2 flex items-start justify-between gap-4">
+            <span>{state.feedback.message}</span>
+            <button type="button" className="btn" onClick={state.clearFeedback}>
+              Fermer
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <DashboardModals
         modals={state.modals}
         onClose={state.closeModal}

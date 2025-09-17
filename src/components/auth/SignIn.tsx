@@ -1,9 +1,7 @@
-import { FormEvent, MutableRefObject, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../services/supabaseClient';
 
 const CODE_LENGTH = 6;
-
-type InputRefs = MutableRefObject<HTMLInputElement | null>[];
 
 const SignIn = () => {
   const [email, setEmail] = useState('');
@@ -12,8 +10,28 @@ const SignIn = () => {
   const [loading, setLoading] = useState(false);
   const [notWhitelisted, setNotWhitelisted] = useState(false);
   const [codeDigits, setCodeDigits] = useState<string[]>(Array(CODE_LENGTH).fill(''));
+  const emailInputRef = useRef<HTMLInputElement | null>(null);
+  const codeRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  const codeRefs = useMemo<InputRefs>(() => Array.from({ length: CODE_LENGTH }, () => useRef<HTMLInputElement | null>(null)), []);
+  useEffect(() => {
+    if (!sent) {
+      emailInputRef.current?.focus();
+    }
+  }, [sent]);
+
+  useEffect(() => {
+    if (!sent) {
+      return;
+    }
+    if (typeof window === 'undefined') {
+      codeRefs.current[0]?.focus();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      codeRefs.current[0]?.focus();
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [sent]);
 
   const handleRequestCode = async (event: FormEvent) => {
     event.preventDefault();
@@ -21,11 +39,14 @@ const SignIn = () => {
     setLoading(true);
     setNotWhitelisted(false);
 
+    const normalizedEmail = email.trim().toLowerCase();
+    setEmail(normalizedEmail);
+
     try {
       const { data, error: whitelistError } = await supabase
         .from('allowed_users')
         .select('email')
-        .eq('email', email.toLowerCase())
+        .eq('email', normalizedEmail)
         .eq('active', true)
         .single();
 
@@ -36,7 +57,7 @@ const SignIn = () => {
       }
 
       const { error: signInError } = await supabase.auth.signInWithOtp({
-        email,
+        email: normalizedEmail,
         options: { shouldCreateUser: true, emailRedirectTo: window.location.origin },
       });
 
@@ -45,7 +66,7 @@ const SignIn = () => {
         setError(signInError.message);
       } else {
         setSent(true);
-        setTimeout(() => codeRefs[0]?.current?.focus(), 50);
+        setCodeDigits(Array(CODE_LENGTH).fill(''));
       }
     } catch (err) {
       console.error('Whitelist check error', err);
@@ -58,9 +79,17 @@ const SignIn = () => {
     event.preventDefault();
     setError('');
     setLoading(true);
+    const token = codeDigits.join('');
+
+    if (token.length < CODE_LENGTH) {
+      setLoading(false);
+      setError('Veuillez saisir le code complet.');
+      return;
+    }
+
     const { error: verifyError } = await supabase.auth.verifyOtp({
       email,
-      token: codeDigits.join(''),
+      token,
       type: 'email',
     });
     setLoading(false);
@@ -72,6 +101,27 @@ const SignIn = () => {
   const resetEmail = () => {
     setSent(false);
     setCodeDigits(Array(CODE_LENGTH).fill(''));
+    setError('');
+    setNotWhitelisted(false);
+    if (typeof window === 'undefined') {
+      emailInputRef.current?.focus();
+      return;
+    }
+    window.setTimeout(() => {
+      emailInputRef.current?.focus();
+    }, 0);
+  };
+
+  const updateDigit = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, '').slice(0, 1);
+    setCodeDigits((prev) => {
+      const next = [...prev];
+      next[index] = digit;
+      return next;
+    });
+    if (digit && index < CODE_LENGTH - 1) {
+      codeRefs.current[index + 1]?.focus();
+    }
   };
 
   if (notWhitelisted) {
@@ -98,7 +148,7 @@ const SignIn = () => {
               </a>
             </div>
           </div>
-          <button onClick={resetEmail} className="btn w-full">
+          <button onClick={resetEmail} className="btn w-full" type="button">
             Essayer avec un autre e-mail
           </button>
         </div>
@@ -122,6 +172,7 @@ const SignIn = () => {
                 E-mail
               </label>
               <input
+                ref={emailInputRef}
                 id="email"
                 type="email"
                 required
@@ -129,35 +180,34 @@ const SignIn = () => {
                 onChange={(event) => setEmail(event.target.value)}
                 className="mt-1 w-full px-3 py-2 rounded-xl border"
                 placeholder="vous@exemple.com"
+                autoComplete="email"
+                aria-invalid={Boolean(error && !sent)}
               />
             </div>
-            <button type="submit" disabled={loading} className="w-full btn btn-primary">
+            <button type="submit" disabled={loading || !email.trim()} className="w-full btn btn-primary">
               {loading ? 'Vérification...' : 'Recevoir le code'}
             </button>
           </form>
         ) : (
           <form onSubmit={handleVerifyCode} className="space-y-3">
             <div>
-              <label className="text-xs text-gray-500">Code à 6 chiffres</label>
+              <label className="text-xs text-gray-500" htmlFor="otp-0">
+                Code à 6 chiffres
+              </label>
             </div>
             <div className="flex gap-2 justify-between">
-              {codeRefs.map((ref, index) => (
+              {codeDigits.map((digit, index) => (
                 <input
                   key={index}
-                  ref={ref}
+                  ref={(element) => {
+                    codeRefs.current[index] = element;
+                  }}
                   className="otp-input"
                   inputMode="numeric"
                   maxLength={1}
-                  value={codeDigits[index]}
-                  onChange={(event) => {
-                    const digit = event.target.value.replace(/\D/g, '').slice(0, 1);
-                    const next = [...codeDigits];
-                    next[index] = digit;
-                    setCodeDigits(next);
-                    if (digit && index < CODE_LENGTH - 1) {
-                      codeRefs[index + 1]?.current?.focus();
-                    }
-                  }}
+                  id={`otp-${index}`}
+                  value={digit}
+                  onChange={(event) => updateDigit(index, event.target.value)}
                   onPaste={
                     index === 0
                       ? (event) => {
@@ -165,22 +215,40 @@ const SignIn = () => {
                           const pasted = event.clipboardData.getData('text');
                           const digits = pasted.replace(/\D/g, '').slice(0, CODE_LENGTH);
                           if (digits.length > 0) {
-                            const next = Array(CODE_LENGTH).fill('');
-                            for (let i = 0; i < Math.min(digits.length, CODE_LENGTH); i += 1) {
-                              next[i] = digits[i];
-                            }
-                            setCodeDigits(next);
+                            setCodeDigits((prev) => {
+                              const next = [...prev];
+                              for (let i = 0; i < CODE_LENGTH; i += 1) {
+                                next[i] = digits[i] ?? '';
+                              }
+                              return next;
+                            });
                             const nextIndex = Math.min(digits.length, CODE_LENGTH - 1);
-                            setTimeout(() => codeRefs[nextIndex]?.current?.focus(), 10);
+                            if (typeof window === 'undefined') {
+                              codeRefs.current[nextIndex]?.focus();
+                            } else {
+                              window.setTimeout(() => {
+                                codeRefs.current[nextIndex]?.focus();
+                              }, 0);
+                            }
                           }
                         }
                       : undefined
                   }
                   onKeyDown={(event) => {
                     if (event.key === 'Backspace' && !codeDigits[index] && index > 0) {
-                      codeRefs[index - 1]?.current?.focus();
+                      codeRefs.current[index - 1]?.focus();
+                    }
+                    if (event.key === 'ArrowLeft' && index > 0) {
+                      event.preventDefault();
+                      codeRefs.current[index - 1]?.focus();
+                    }
+                    if (event.key === 'ArrowRight' && index < CODE_LENGTH - 1) {
+                      event.preventDefault();
+                      codeRefs.current[index + 1]?.focus();
                     }
                   }}
+                  autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                  aria-label={`Code chiffre ${index + 1}`}
                 />
               ))}
             </div>
@@ -196,11 +264,9 @@ const SignIn = () => {
             </button>
           </form>
         )}
-        {error && (
-          <div className="text-sm text-red-600" role="alert">
-            {error}
-          </div>
-        )}
+        <div className="text-sm" role="status" aria-live="polite">
+          {error ? <span className="text-red-600">{error}</span> : null}
+        </div>
       </div>
     </main>
   );

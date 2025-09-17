@@ -37,28 +37,23 @@ const WorkersPanel = ({
 }: WorkersPanelProps) => {
   return (
     <section className="bg-white rounded-2xl border shadow-sm">
-      <div
-        className="px-4 py-3 border-b flex items-center gap-3 cursor-pointer select-none"
-        onClick={onToggleOpen}
-        role="button"
-        aria-expanded={open}
-        aria-controls="workers-panel"
-      >
-        <h2 className="font-semibold">Ouvriers</h2>
-        <div className="ml-auto text-xs text-gray-500">{workers.length} ouvrier(s)</div>
+      <div className="px-4 py-3 border-b flex items-center gap-3">
         <button
           type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpenAddWorker();
-          }}
-          className="ml-3 btn"
+          onClick={onToggleOpen}
+          className="panel-toggle flex items-center gap-3 flex-1"
+          aria-expanded={open}
+          aria-controls="workers-panel"
         >
+          <span className="font-semibold">Ouvriers</span>
+          <span className="ml-auto text-xs text-gray-500">{workers.length} ouvrier(s)</span>
+          <span className="text-gray-400" aria-hidden="true">
+            {open ? '▾' : '▸'}
+          </span>
+        </button>
+        <button type="button" onClick={onOpenAddWorker} className="ml-3 btn">
           Ajouter
         </button>
-        <span className="text-gray-400" aria-hidden="true">
-          {open ? '▾' : '▸'}
-        </span>
       </div>
       {open && (
         <div id="workers-panel" className="p-4">
