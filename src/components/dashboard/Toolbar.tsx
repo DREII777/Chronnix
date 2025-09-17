@@ -56,11 +56,16 @@ const Toolbar = ({
               </option>
             ))}
           </select>
-          <button className="btn" onClick={onOpenNewProject} aria-label="Nouveau chantier">
+          <button type="button" className="btn" onClick={onOpenNewProject} aria-label="Nouveau chantier">
             +
           </button>
           {hasProject && (
-            <button className="btn" onClick={onOpenProjectSettings} aria-label="Paramètres du chantier">
+            <button
+              type="button"
+              className="btn"
+              onClick={onOpenProjectSettings}
+              aria-label="Paramètres du chantier"
+            >
               ⚙
             </button>
           )}
@@ -69,7 +74,12 @@ const Toolbar = ({
           <label htmlFor="period-input" className="text-xs text-gray-500 mr-1">
             Période
           </label>
-          <button className="px-2 py-1 rounded-lg border" onClick={() => onShiftMonth(-1)} aria-label="Mois précédent">
+          <button
+            type="button"
+            className="px-2 py-1 rounded-lg border"
+            onClick={() => onShiftMonth(-1)}
+            aria-label="Mois précédent"
+          >
             ‹
           </button>
           <input
@@ -79,12 +89,18 @@ const Toolbar = ({
             onChange={(event) => onYearMonthChange(event.target.value)}
             className="px-3 py-1.5 rounded-xl border bg-white"
           />
-          <button className="px-2 py-1 rounded-lg border" onClick={() => onShiftMonth(1)} aria-label="Mois suivant">
+          <button
+            type="button"
+            className="px-2 py-1 rounded-lg border"
+            onClick={() => onShiftMonth(1)}
+            aria-label="Mois suivant"
+          >
             ›
           </button>
           <div className="w-px h-6 bg-gray-200 mx-2" />
           <div className="relative">
             <button
+              type="button"
               ref={exportBtnRef}
               className="btn"
               onClick={(event) => {
@@ -100,6 +116,7 @@ const Toolbar = ({
             {exportOpen && (
               <div ref={exportMenuRef} className="menu" role="menu" aria-label="Menu Export">
                 <button
+                  type="button"
                   role="menuitem"
                   onClick={() => {
                     setExportOpen(false);
@@ -109,6 +126,7 @@ const Toolbar = ({
                   💶 Paie (XLSX)
                 </button>
                 <button
+                  type="button"
                   role="menuitem"
                   onClick={() => {
                     setExportOpen(false);

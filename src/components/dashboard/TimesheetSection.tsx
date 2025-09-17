@@ -42,17 +42,17 @@ const TimesheetSection = ({
   };
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const value = event.target.value.replace(/[^\d:]/g, '');
+    const value = event.target.value.replace(/[^\d:]/g, '').slice(0, 5);
     setEditingValue(value);
   };
 
   const commitValue = (workerId: string, day: number, rawValue: string) => {
     const formatted = timeHelpers.validateTime(rawValue);
     const decimal = timeHelpers.hhmmToDecimal(formatted || rawValue);
-    if (decimal > 0) {
-      setHours(workerId, day, decimal);
-    } else if (rawValue === '') {
+    if (rawValue === '') {
       setHours(workerId, day, 0);
+    } else if (!Number.isNaN(decimal) && decimal >= 0) {
+      setHours(workerId, day, decimal);
     }
     setEditingCell(null);
     setEditingValue('');
@@ -136,6 +136,7 @@ const TimesheetSection = ({
                             onBlur={handleBlur(worker.id, day, isEditing)}
                           />
                           <button
+                            type="button"
                             className={`badge ${status === 'worked' ? 'bg-emerald-50' : 'bg-gray-50'}`}
                             onClick={() => toggleStatus(worker.id, day)}
                             aria-label={`${status} - cliquer pour changer`}

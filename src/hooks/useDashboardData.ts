@@ -8,6 +8,11 @@ import { toNum } from '../utils/numberUtils';
 import { decimalToHHMM, hhmmToDecimal, validateTimeInput } from '../utils/timeUtils';
 import { exportDetailXlsx, exportPayrollXlsx } from '../services/xlsxService';
 
+type Feedback = {
+  type: 'success' | 'error';
+  message: string;
+};
+
 export interface DashboardFormData {
   pName: string;
   pClient: string;
@@ -94,6 +99,8 @@ export interface DashboardState {
   logout: () => Promise<void>;
   shiftMonth: (delta: number) => void;
   setOpenWorkers: Dispatch<SetStateAction<boolean>>;
+  feedback: Feedback | null;
+  clearFeedback: () => void;
 }
 
 export const useDashboardData = (user: User): DashboardState => {
@@ -113,7 +120,10 @@ export const useDashboardData = (user: User): DashboardState => {
   const [allEntries, setAllEntries] = useState<TimeEntry[]>([]);
   const [openWorkers, setOpenWorkers] = useState(false);
   const [globalTotals, setGlobalTotals] = useState<Totals>({ hours: 0, factu: 0, paie: 0 });
-  const [projectId, setProjectIdState] = useState<string | null>(() => localStorage.getItem('projectId'));
+  const [projectId, setProjectIdState] = useState<string | null>(() => {
+    const stored = localStorage.getItem('projectId');
+    return stored && stored !== 'null' ? stored : null;
+  });
   const [yearMonth, setYearMonthState] = useState<string>(() => localStorage.getItem('ym') || yearMonthFromDate());
   const [editRates, setEditRates] = useState<Record<string, string>>({});
   const [editingRate, setEditingRate] = useState<string | null>(null);
@@ -141,6 +151,7 @@ export const useDashboardData = (user: User): DashboardState => {
     pRate: '',
     pDefaultH: '8',
   });
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   const { from, to } = useMemo(() => monthBounds(yearMonth), [yearMonth]);
 
@@ -149,12 +160,34 @@ export const useDashboardData = (user: User): DashboardState => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('projectId', projectId ?? '');
+    if (projectId) {
+      localStorage.setItem('projectId', projectId);
+    } else {
+      localStorage.removeItem('projectId');
+    }
   }, [projectId]);
 
   useEffect(() => {
     localStorage.setItem('ym', yearMonth);
   }, [yearMonth]);
+
+  useEffect(() => {
+    if (!feedback) {
+      return;
+    }
+    if (typeof window === 'undefined') {
+      setFeedback(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setFeedback(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
+  const notify = useCallback((type: Feedback['type'], message: string) => {
+    setFeedback({ type, message });
+  }, []);
+
+  const clearFeedback = useCallback(() => setFeedback(null), []);
 
   useEffect(() => {
     if (!exportOpen) return;
@@ -197,7 +230,7 @@ export const useDashboardData = (user: User): DashboardState => {
   const openModal = useCallback((key: keyof DashboardState['modals']) => {
     if (key === 'projectSettings') {
       if (!projectId) {
-        alert('Sélectionnez un chantier.');
+        notify('error', 'Sélectionnez un chantier avant d\'accéder aux paramètres.');
         return;
       }
       const project = projects.find((item) => item.id === projectId);
@@ -216,7 +249,7 @@ export const useDashboardData = (user: User): DashboardState => {
     if (key === 'addWorker') {
       setFormData((prev) => ({ ...prev, wName: '', wEmail: '', wPay: '' }));
     }
-  }, [projectId, projects]);
+  }, [projectId, projects, notify]);
 
   const closeModal = useCallback((key: keyof DashboardState['modals']) => {
     setModals((prev) => ({ ...prev, [key]: false }));
@@ -245,7 +278,7 @@ export const useDashboardData = (user: User): DashboardState => {
   }, [user.id]);
 
   const setProjectId = useCallback((value: string | null) => {
-    setProjectIdState(value);
+    setProjectIdState(value || null);
   }, []);
 
   const setYearMonth = useCallback((value: string) => {
@@ -257,25 +290,38 @@ export const useDashboardData = (user: User): DashboardState => {
       setEntries([]);
       return;
     }
-    const response = await supabase
-      .from('time_entries')
-      .select('*, worker:workers(*), project:projects(*)')
-      .eq('owner', user.id)
-      .eq('project_id', projectId)
-      .gte('work_date', from)
-      .lte('work_date', to)
-      .order('work_date');
-    setEntries(response.data ?? []);
-  }, [projectId, user.id, from, to]);
+    try {
+      const { data, error } = await supabase
+        .from('time_entries')
+        .select('*, worker:workers(*), project:projects(*)')
+        .eq('owner', user.id)
+        .eq('project_id', projectId)
+        .gte('work_date', from)
+        .lte('work_date', to)
+        .order('work_date');
+      if (error) {
+        throw error;
+      }
+      setEntries(data ?? []);
+    } catch (error) {
+      console.error('Failed to load entries', error);
+      setEntries([]);
+      notify('error', 'Impossible de charger les pointages du chantier.');
+    }
+  }, [projectId, user.id, from, to, notify]);
 
   const loadGlobalTotals = useCallback(async () => {
     const { from: globalFrom, to: globalTo } = monthBounds(yearMonth);
-    const response = await supabase
-      .from('time_entries')
-      .select('hours, project:projects(bill_rate), worker:workers(pay_rate)')
-      .eq('owner', user.id)
-      .gte('work_date', globalFrom)
-      .lte('work_date', globalTo);
+    try {
+      const { data, error } = await supabase
+        .from('time_entries')
+        .select('hours, project:projects(bill_rate), worker:workers(pay_rate)')
+        .eq('owner', user.id)
+        .gte('work_date', globalFrom)
+        .lte('work_date', globalTo);
+      if (error) {
+        throw error;
+      }
 
     let hours = 0;
     let factu = 0;
@@ -289,31 +335,45 @@ export const useDashboardData = (user: User): DashboardState => {
       worker: PayRateRecord | PayRateRecord[] | null;
     };
 
-    const rows = (response.data ?? []) as unknown as GlobalTotalsRow[];
+      const rows = (data ?? []) as unknown as GlobalTotalsRow[];
 
-    rows.forEach((entry) => {
-      const project = Array.isArray(entry.project) ? entry.project[0] : entry.project;
-      const worker = Array.isArray(entry.worker) ? entry.worker[0] : entry.worker;
-      const h = toNum(entry.hours);
-      const br = toNum(project?.bill_rate);
-      const wr = toNum(worker?.pay_rate);
-      hours += h;
-      factu += h * br;
-      paie += h * wr;
-    });
+      rows.forEach((entry) => {
+        const project = Array.isArray(entry.project) ? entry.project[0] : entry.project;
+        const worker = Array.isArray(entry.worker) ? entry.worker[0] : entry.worker;
+        const h = toNum(entry.hours);
+        const br = toNum(project?.bill_rate);
+        const wr = toNum(worker?.pay_rate);
+        hours += h;
+        factu += h * br;
+        paie += h * wr;
+      });
 
-    setGlobalTotals({ hours, factu, paie });
-  }, [user.id, yearMonth]);
+      setGlobalTotals({ hours, factu, paie });
+    } catch (error) {
+      console.error('Failed to load global totals', error);
+      setGlobalTotals({ hours: 0, factu: 0, paie: 0 });
+      notify('error', 'Impossible de calculer les totaux globaux.');
+    }
+  }, [user.id, yearMonth, notify]);
 
   const loadAllEntries = useCallback(async () => {
-    const response = await supabase
-      .from('time_entries')
-      .select('*, worker:workers(*), project:projects(*)')
-      .eq('owner', user.id)
-      .gte('work_date', from)
-      .lte('work_date', to);
-    setAllEntries(response.data ?? []);
-  }, [user.id, from, to]);
+    try {
+      const { data, error } = await supabase
+        .from('time_entries')
+        .select('*, worker:workers(*), project:projects(*)')
+        .eq('owner', user.id)
+        .gte('work_date', from)
+        .lte('work_date', to);
+      if (error) {
+        throw error;
+      }
+      setAllEntries(data ?? []);
+    } catch (error) {
+      console.error('Failed to load entries for export', error);
+      setAllEntries([]);
+      notify('error', 'Impossible de préparer les exports.');
+    }
+  }, [user.id, from, to, notify]);
 
   const refreshData = useCallback(() => Promise.all([loadEntries(), loadGlobalTotals(), loadAllEntries()]), [
     loadEntries,
@@ -328,16 +388,25 @@ export const useDashboardData = (user: User): DashboardState => {
         setEntries([]);
         return;
       }
-      const relation = await supabase
-        .from('project_workers')
-        .select('worker_id')
-        .eq('owner', user.id)
-        .eq('project_id', projectId);
-      setAssignedIds((relation.data ?? []).map((item) => item.worker_id));
+      try {
+        const { data, error } = await supabase
+          .from('project_workers')
+          .select('worker_id')
+          .eq('owner', user.id)
+          .eq('project_id', projectId);
+        if (error) {
+          throw error;
+        }
+        setAssignedIds((data ?? []).map((item) => item.worker_id));
+      } catch (error) {
+        console.error('Failed to load worker assignments', error);
+        setAssignedIds([]);
+        notify('error', 'Impossible de charger les affectations du chantier.');
+      }
       await loadEntries();
     };
     loadProjectData();
-  }, [user.id, projectId, yearMonth, loadEntries]);
+  }, [user.id, projectId, yearMonth, loadEntries, notify]);
 
   useEffect(() => {
     loadGlobalTotals();
@@ -369,12 +438,12 @@ export const useDashboardData = (user: User): DashboardState => {
             .eq('worker_id', workerId);
       const { error } = await query;
       if (error) {
-        alert(error.message);
+        notify('error', error.message);
         return;
       }
       setAssignedIds((prev) => (checked ? Array.from(new Set([...prev, workerId])) : prev.filter((id) => id !== workerId)));
     },
-    [projectId, user.id],
+    [projectId, user.id, notify],
   );
 
   const createProject = useCallback(
@@ -392,14 +461,15 @@ export const useDashboardData = (user: User): DashboardState => {
         .select()
         .single();
       if (error) {
-        alert(error.message);
+        notify('error', error.message);
         return;
       }
       setProjects((prev) => [data as Project, ...prev]);
       setProjectIdState((data as Project).id);
       closeModal('newProject');
+      notify('success', 'Chantier créé avec succès.');
     },
-    [closeModal, formData, user.id],
+    [closeModal, formData, user.id, notify],
   );
 
   const updateProject = useCallback(
@@ -416,7 +486,7 @@ export const useDashboardData = (user: User): DashboardState => {
         .eq('id', projectId)
         .eq('owner', user.id);
       if (error) {
-        alert(error.message);
+        notify('error', error.message);
         return;
       }
       const updated = await supabase
@@ -428,19 +498,22 @@ export const useDashboardData = (user: User): DashboardState => {
       setProjects(updated.data ?? []);
       closeModal('projectSettings');
       await Promise.all([loadEntries(), loadGlobalTotals()]);
+      notify('success', 'Chantier mis à jour.');
     },
-    [closeModal, editData, projectId, user.id, loadEntries, loadGlobalTotals],
+    [closeModal, editData, projectId, user.id, loadEntries, loadGlobalTotals, notify],
   );
 
   const deleteProject = useCallback(async () => {
     if (!projectId) return;
     const project = projects.find((item) => item.id === projectId);
-    const confirmation = confirm(
-      `Chantier : ${project?.name || 'Sans nom'}\n\n` +
-        '• Le chantier sera SUPPRIMÉ DÉFINITIVEMENT \n' +
-        "• Cette action est irréversible\n" +
+    const confirmation = typeof window !== 'undefined'
+      ? window.confirm(
+        `Chantier : ${project?.name || 'Sans nom'}\n\n` +
+          '• Le chantier sera SUPPRIMÉ DÉFINITIVEMENT \n' +
+          "• Cette action est irréversible\n" +
         'Continuer ?',
-    );
+      )
+      : false;
     if (!confirmation) return;
 
     const { error } = await supabase
@@ -449,7 +522,7 @@ export const useDashboardData = (user: User): DashboardState => {
       .eq('owner', user.id)
       .eq('id', projectId);
     if (error) {
-      alert(error.message);
+      notify('error', error.message);
       return;
     }
 
@@ -464,7 +537,8 @@ export const useDashboardData = (user: User): DashboardState => {
     setProjectIdState(null);
     closeModal('projectSettings');
     await refreshData();
-  }, [projectId, projects, user.id, closeModal, refreshData]);
+    notify('success', 'Chantier archivé.');
+  }, [projectId, projects, user.id, closeModal, refreshData, notify]);
 
   const createWorker = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -480,26 +554,29 @@ export const useDashboardData = (user: User): DashboardState => {
         .select()
         .single();
       if (error) {
-        alert(error.message);
+        notify('error', error.message);
         return;
       }
       setWorkers((prev) => [data as Worker, ...prev]);
       closeModal('addWorker');
+      notify('success', 'Ouvrier ajouté.');
     },
-    [closeModal, formData, user.id],
+    [closeModal, formData, user.id, notify],
   );
 
   const deleteWorker = useCallback(
     async (worker: Worker) => {
       const name = worker.full_name || worker.email || worker.id.slice(0, 8);
-      const confirmation = confirm(
+      const confirmation = typeof window !== 'undefined'
+        ? window.confirm(
         `Ouvrier : ${name}\n\n` +
           "• L'ouvrier sera SUPPRIMÉ DÉFINITIVEMENT \n" +
           '• Cette action est irréversible\n' +
           '• Il sera retiré des affectations\n' +
           '• Les pointages EXISTANTS sont conservés (historique)\n\n' +
           'Continuer ?',
-      );
+        )
+        : false;
       if (!confirmation) return;
 
       const { error } = await supabase
@@ -508,7 +585,7 @@ export const useDashboardData = (user: User): DashboardState => {
         .eq('owner', user.id)
         .eq('id', worker.id);
       if (error) {
-        alert(error.message);
+        notify('error', error.message);
         return;
       }
 
@@ -521,8 +598,9 @@ export const useDashboardData = (user: User): DashboardState => {
         .order('created_at', { ascending: false });
       setWorkers(refreshed.data ?? []);
       await refreshData();
+      notify('success', 'Ouvrier supprimé.');
     },
-    [user.id, refreshData],
+    [user.id, refreshData, notify],
   );
 
   const startEditRate = useCallback((worker: Worker) => {
@@ -548,7 +626,7 @@ export const useDashboardData = (user: User): DashboardState => {
         .eq('id', workerId)
         .eq('owner', user.id);
       if (error) {
-        alert(error.message);
+        notify('error', error.message);
         return;
       }
       const refreshed = await supabase
@@ -560,8 +638,9 @@ export const useDashboardData = (user: User): DashboardState => {
       setWorkers(refreshed.data ?? []);
       setEditingRate(null);
       await refreshData();
+      notify('success', 'Taux horaire mis à jour.');
     },
-    [editRates, user.id, refreshData],
+    [editRates, user.id, refreshData, notify],
   );
 
   const upsertEntry = useCallback(
@@ -585,12 +664,12 @@ export const useDashboardData = (user: User): DashboardState => {
         .from('time_entries')
         .upsert(record, { onConflict: 'owner,project_id,worker_id,work_date' });
       if (error) {
-        alert(error.message);
+        notify('error', error.message);
         return;
       }
       await refreshData();
     },
-    [projectId, yearMonth, entries, user.id, refreshData],
+    [projectId, yearMonth, entries, user.id, refreshData, notify],
   );
 
   const setHours = useCallback(
@@ -649,19 +728,31 @@ export const useDashboardData = (user: User): DashboardState => {
   }, [entries]);
 
   const exportPayroll = useCallback(async () => {
-    await exportPayrollXlsx(projectId ? entries : allEntries, yearMonth);
-  }, [entries, allEntries, projectId, yearMonth]);
+    try {
+      await exportPayrollXlsx(projectId ? entries : allEntries, yearMonth);
+      notify('success', 'Export paie généré.');
+    } catch (error) {
+      console.error('Payroll export failed', error);
+      notify('error', "L'export paie a échoué. Veuillez réessayer.");
+    }
+  }, [entries, allEntries, projectId, yearMonth, notify]);
 
   const exportDetails = useCallback(async () => {
-    await exportDetailXlsx({
-      yearMonth,
-      projectId,
-      projects,
-      workers,
-      entries,
-      allEntries,
-    });
-  }, [yearMonth, projectId, projects, workers, entries, allEntries]);
+    try {
+      await exportDetailXlsx({
+        yearMonth,
+        projectId,
+        projects,
+        workers,
+        entries,
+        allEntries,
+      });
+      notify('success', 'Export détaillé généré.');
+    } catch (error) {
+      console.error('Detail export failed', error);
+      notify('error', "L'export détaillé a échoué. Veuillez réessayer.");
+    }
+  }, [yearMonth, projectId, projects, workers, entries, allEntries, notify]);
 
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
@@ -730,6 +821,8 @@ export const useDashboardData = (user: User): DashboardState => {
     logout,
     shiftMonth,
     setOpenWorkers,
+    feedback,
+    clearFeedback,
   };
 };
 
