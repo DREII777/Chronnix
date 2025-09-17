@@ -93,7 +93,7 @@ export const buildTimesheetsWorkbook = (
       worksheet.pageSetup.printTitlesRow = '1:1';
 
       if (resolvedOptions.applyPrintSetup) {
-        worksheet.pageSetup.orientation = 'portrait';
+        worksheet.pageSetup.orientation = 'landscape';
         worksheet.pageSetup.fitToPage = true;
         worksheet.pageSetup.fitToWidth = 1;
         worksheet.pageSetup.fitToHeight = 1;

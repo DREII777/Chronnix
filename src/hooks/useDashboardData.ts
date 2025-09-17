@@ -96,11 +96,6 @@ export interface DashboardState {
   refreshData: () => Promise<unknown[]>;
   exportPayroll: () => Promise<void>;
   exportDetails: () => Promise<void>;
-  exportOptions: {
-    onePagePortrait: boolean;
-    withColors: boolean;
-  };
-  toggleExportOption: (option: 'onePagePortrait' | 'withColors') => void;
   logout: () => Promise<void>;
   shiftMonth: (delta: number) => void;
   setOpenWorkers: Dispatch<SetStateAction<boolean>>;
@@ -135,7 +130,6 @@ export const useDashboardData = (user: User): DashboardState => {
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [exportOpen, setExportOpen] = useState(false);
-  const [exportOptions, setExportOptions] = useState({ onePagePortrait: true, withColors: true });
   const exportBtnRef = useRef<HTMLButtonElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const [modals, setModals] = useState({
@@ -752,21 +746,13 @@ export const useDashboardData = (user: User): DashboardState => {
         workers,
         entries,
         allEntries,
-        options: {
-          applyPrintSetup: exportOptions.onePagePortrait,
-          applyColors: exportOptions.withColors,
-        },
       });
       notify('success', 'Export détaillé généré.');
     } catch (error) {
       console.error('Detail export failed', error);
       notify('error', "L'export détaillé a échoué. Veuillez réessayer.");
     }
-  }, [yearMonth, projectId, projects, workers, entries, allEntries, exportOptions, notify]);
-
-  const toggleExportOption = useCallback((option: 'onePagePortrait' | 'withColors') => {
-    setExportOptions((prev) => ({ ...prev, [option]: !prev[option] }));
-  }, []);
+  }, [yearMonth, projectId, projects, workers, entries, allEntries, notify]);
 
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
@@ -832,8 +818,6 @@ export const useDashboardData = (user: User): DashboardState => {
     refreshData,
     exportPayroll,
     exportDetails,
-    exportOptions,
-    toggleExportOption,
     logout,
     shiftMonth,
     setOpenWorkers,

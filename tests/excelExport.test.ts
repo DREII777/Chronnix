@@ -22,7 +22,7 @@ describe('buildTimesheetsWorkbook', () => {
     expect(worksheet).toBeDefined();
     if (!worksheet) return;
 
-    expect(worksheet.pageSetup.orientation).toBe('portrait');
+    expect(worksheet.pageSetup.orientation).toBe('landscape');
     expect(worksheet.pageSetup.fitToPage).toBe(true);
     expect(worksheet.pageSetup.fitToWidth).toBe(1);
     expect(worksheet.pageSetup.fitToHeight).toBe(1);

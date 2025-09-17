@@ -17,11 +17,6 @@ interface ToolbarProps {
   exportMenuRef: RefObject<HTMLDivElement>;
   onExportPayroll: () => Promise<void> | void;
   onExportDetails: () => Promise<void> | void;
-  exportOptions: {
-    onePagePortrait: boolean;
-    withColors: boolean;
-  };
-  onToggleExportOption: (option: 'onePagePortrait' | 'withColors') => void;
 }
 
 const Toolbar = ({
@@ -40,8 +35,6 @@ const Toolbar = ({
   exportMenuRef,
   onExportPayroll,
   onExportDetails,
-  exportOptions,
-  onToggleExportOption,
 }: ToolbarProps) => {
   return (
     <section className="bg-white/90 border-b">
@@ -122,33 +115,6 @@ const Toolbar = ({
             </button>
             {exportOpen && (
               <div ref={exportMenuRef} className="menu" role="menu" aria-label="Menu Export">
-                <div className="px-3 py-2 text-xs font-semibold uppercase text-gray-500 border-b border-gray-100">
-                  Options
-                </div>
-                <label
-                  className="flex items-center gap-2 px-3 py-2 text-sm border-t border-b border-gray-100 first:border-t-0"
-                  role="menuitemcheckbox"
-                  aria-checked={exportOptions.onePagePortrait}
-                >
-                  <input
-                    type="checkbox"
-                    checked={exportOptions.onePagePortrait}
-                    onChange={() => onToggleExportOption('onePagePortrait')}
-                  />
-                  One-page portrait
-                </label>
-                <label
-                  className="flex items-center gap-2 px-3 py-2 text-sm border-b border-gray-100"
-                  role="menuitemcheckbox"
-                  aria-checked={exportOptions.withColors}
-                >
-                  <input
-                    type="checkbox"
-                    checked={exportOptions.withColors}
-                    onChange={() => onToggleExportOption('withColors')}
-                  />
-                  Couleurs
-                </label>
                 <button
                   type="button"
                   role="menuitem"
