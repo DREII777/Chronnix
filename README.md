@@ -1,84 +1,90 @@
-# Chronnix — refonte modulaire
+# Chronnix — feuille de temps connectée à Supabase
 
-Chronnix est une feuille de temps connectée à Supabase permettant de gérer les chantiers, les ouvriers et les exports comptables. Cette refonte transforme l'ancienne page HTML monolithique en une application React + TypeScript modulaire, prête pour un bundler moderne (Vite).
+Chronnix est une application React + TypeScript permettant aux équipes TMF Compta de gérer les chantiers, les ouvriers et les heures travaillées. Cette version modulaire remplace l'ancienne page HTML en centralisant l'authentification OTP, la planification mensuelle, le suivi des taux horaires et les exports comptables (paie & détaillé) dans une interface unifiée.
 
-## Architecture cible
+## Fonctionnalités principales
+
+- **Authentification sécurisée** : connexion par OTP via Supabase, contrôle de la whitelist (`allowed_users`) et gestion d'états de chargement/erreur accessibles.
+- **Tableau de bord par chantier** : sélection d'un projet, navigation mensuelle, affichage des totaux (heures, facturation, paie) et bandeau de notifications éphémères.
+- **Gestion des équipes** : panneau latéral pour créer/supprimer des ouvriers, ajuster le taux horaire, contrôler les assignations (`project_workers`).
+- **Feuille de temps interactive** : saisie rapide des heures, alternance statut travaillé/absent, validations `HH:MM` ↔ décimal, calcul des totaux par ouvrier et persistance locale du contexte (chantier + mois).
+- **Exports comptables** : génération à la volée de deux fichiers XLSX (paie & détail) via `xlsx`, pré-chargement automatique du module et téléchargement formaté.
+- **Expérience prête pour la production** : manifest PWA, service worker minimal, boutons accessibles, raccourcis clavier pour naviguer dans les champs OTP et fermeture automatique des messages de feedback.
+
+## Stack technique
+
+- [React 18](https://react.dev/) + [TypeScript 5](https://www.typescriptlang.org/)
+- [Vite 5](https://vitejs.dev/) pour le bundling et le serveur de dev
+- [Supabase JS 2](https://supabase.com/docs/reference/javascript/introduction) pour l'authentification et le CRUD
+- [xlsx](https://github.com/SheetJS/sheetjs) pour les exports Excel
+- CSS utilitaire maison (`src/styles.css`) + classes utilitaires Tailwind chargées en CDN dans `index.html`
+- Service worker (`sw.js`) et manifest (`manifest.json`) pour l'installation en web app
+
+## Structure du projet
 
 ```
 .
-├── index.html              # Point d'entrée Vite, charge Tailwind CDN + config Supabase
+├── index.html                # Entrée Vite + chargement Tailwind CDN + config Supabase globale
+├── config.js                 # Fallback de configuration (définit window.SB)
+├── manifest.json / sw.js     # PWA minimale
 ├── src/
-│   ├── App.tsx             # Composition racine, choix Auth/Dashboard
+│   ├── main.tsx              # Montage React + import du style global
+│   ├── App.tsx               # Choix SignIn/Dashboard selon l'état d'authentification
+│   ├── config.ts             # Lecture de la config Supabase (.env ou window.SB)
+│   ├── styles.css            # Style de base (OTP, boutons, tableaux…)
+│   ├── hooks/
+│   │   ├── useAuth.ts        # Gestion de session Supabase et rafraîchissement automatique
+│   │   └── useDashboardData.ts# Source de vérité du tableau de bord (Supabase, localStorage…)
 │   ├── components/
-│   │   ├── auth/           # Authentification (SignIn)
-│   │   ├── common/         # UI génériques (Modal)
-│   │   └── dashboard/      # UI métier (header, toolbar, stats, panels…)
-│   ├── hooks/              # Hooks maison (useAuth, useDashboardData)
-│   ├── services/           # Accès Supabase + exports XLSX
-│   ├── types/              # Modèles partagés et extensions globales
-│   └── utils/              # Fonctions de formatage et de calcul (date/heure…)
-├── tsconfig*.json          # Configuration TypeScript
-├── vite.config.ts          # Configuration Vite + plugin React
-├── config.js               # Fallback Supabase (injecte window.SB)
-├── .env.example            # Variables d'environnement Vite pour Supabase
-└── README.md
+│   │   ├── auth/SignIn.tsx   # Connexion OTP + whitelist
+│   │   ├── common/Modal.tsx  # Infrastructure modales réutilisable
+│   │   └── dashboard/        # Header, Toolbar, WorkersPanel, Timesheet, Stats, Modals…
+│   ├── services/
+│   │   ├── supabaseClient.ts # Initialisation du client (config.ts)
+│   │   └── xlsxService.ts    # Générateurs XLSX + préchargement
+│   ├── utils/                # Helpers de dates, nombres, conversions HH:MM, groupements
+│   └── types/                # Modèles partagés (Project, Worker, TimeEntry…)
+└── package.json              # Scripts npm et dépendances
 ```
 
-Chaque dossier expose un `index.ts` pour des imports propres. Les utilitaires communs (dates, heures, conversions) sont factorisés et réutilisés par les composants et hooks. Les exports XLSX sont centralisés dans `services/xlsxService.ts`, avec chargement dynamique de `xlsx`.
+## Flux de données & Supabase
 
-## Découpage fonctionnel
+- **Tables attendues** :
+  - `allowed_users(email, active)` pour la whitelist OTP.
+  - `projects` (nom, client, taux facturable, heures par défaut, propriétaire).
+  - `workers` (nom, email, taux paie, propriétaire).
+  - `project_workers` (relations n↔n entre projets et ouvriers).
+  - `time_entries` (heures/jour, statut, notes éventuelles).
+- **Hooks clés** : `useAuth` orchestre la session Supabase (écoute des changements, erreurs). `useDashboardData` centralise les appels CRUD, la gestion des modales, l'état d'édition, les exports et la synchronisation locale (localStorage + préchargement `xlsx`).
+- **Services** : `supabaseClient.ts` applique la configuration validée par `src/config.ts`. `xlsxService.ts` produit les feuilles "Paie" et "Détail" avec totaux, en s'appuyant sur les helpers date/heure.
 
-| Module | Rôle principal |
-| --- | --- |
-| `hooks/useAuth` | Gestion de la session Supabase et écoute des changements d'état. |
-| `hooks/useDashboardData` | Source de vérité du tableau de bord (projets, ouvriers, affectations, exports, formulaires). |
-| `components/auth/SignIn` | UI de connexion (OTP, whitelist). |
-| `components/dashboard/*` | Composants UI spécialisés (WorkersPanel, TimesheetSection, Toolbar, Stats, Modals). |
-| `services/supabaseClient` | Initialisation du client Supabase. |
-| `services/xlsxService` | Génération des fichiers XLSX (paie et détail). |
-| `utils/*` | Helpers de dates, heures et conversions numériques. |
+## Configuration Supabase
+
+1. **Variables d'environnement (recommandé)** : créer un `.env` (ou `.env.local`) à partir de `.env.example` et renseigner :
+   ```env
+   VITE_SUPABASE_URL=https://...supabase.co
+   VITE_SUPABASE_ANON_KEY=...
+   ```
+2. **Fallback `config.js`** : si vous ne pouvez pas utiliser d'env Vite, renseignez `config.js` (chargé dans `index.html`) pour définir `window.SB = { url, anon }`.
+3. `src/config.ts` lira ces valeurs au démarrage et lèvera une erreur claire si la configuration est absente.
 
 ## Installation & scripts
 
-1. **Dépendances**
-   ```bash
-   npm install
-   ```
-   > _Note : l'installation nécessite un accès npm. En environnement restreint, copiez un `package-lock.json` généré ailleurs ou utilisez un registre interne._
+```bash
+npm install      # installe les dépendances
+npm run dev      # lance Vite en mode développement
+npm run build    # vérifie les types (tsc) puis construit le bundle
+npm run preview  # sert le build pour validation finale
+```
 
-2. **Configuration Supabase**
-   - Option 1 : créer un fichier `.env` en s'inspirant de `.env.example` :
-     ```env
-     VITE_SUPABASE_URL=...
-     VITE_SUPABASE_ANON_KEY=...
-     ```
-   - Option 2 : conserver `config.js` (script inclus dans `index.html`) qui définit `window.SB`.
+Les dépendances Playwright sont présentes mais aucun scénario de test n'est fourni. `npm run build` constitue donc la validation minimale avant déploiement.
 
-3. **Développement**
-   ```bash
-   npm run dev
-   ```
+## Notes de développement
 
-4. **Build de production**
-   ```bash
-   npm run build
-   ```
-
-5. **Prévisualisation**
-   ```bash
-   npm run preview
-   ```
-
-## Plan de refactorisation
-
-1. **Initialisation Vite + TypeScript** : configuration des scripts npm, Vite, tsconfig, styles globaux et point d'entrée React.
-2. **Factorisation des utilitaires et services** : création des helpers de date/heure, client Supabase typé, services d'export XLSX.
-3. **Découpage UI / Hooks** : extraction des composants (auth, dashboard, modals, panels), création du hook `useDashboardData` pour encapsuler la logique métier.
-4. **Documentation & DX** : ajout d'un README détaillé, d'un `.env.example` et des exports d'index pour une navigation claire du code.
-
-## Tests
-
-Les tests automatisés ne sont pas fournis. Le build TypeScript (`npm run build`) assure la validation statique. Pensez à exécuter les commandes ci-dessus après configuration des dépendances.
+- Les états clés (chantier sélectionné, mois affiché) sont conservés dans `localStorage` pour fluidifier la reprise de session.
+- Les exports XLSX sont générés côté client ; assurez-vous d'activer les accès Supabase en lecture sur les tables concernées.
+- L'interface est conçue pour fonctionner hors Tailwind compilé : les classes utilitaires critiques sont définies dans `styles.css` afin de rester autonome.
+- Pour déployer en PWA, publiez `manifest.json` et `sw.js` tels quels ; le service worker actuel se contente de prendre le contrôle immédiatement (pas de cache offline).
 
 ## Licence
 
