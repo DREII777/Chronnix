@@ -17,7 +17,6 @@ interface ToolbarProps {
   exportMenuRef: RefObject<HTMLDivElement>;
   onExportPayroll: () => Promise<void> | void;
   onExportDetails: () => Promise<void> | void;
-  onExportGlobal: () => Promise<void> | void;
 }
 
 const Toolbar = ({
@@ -36,7 +35,6 @@ const Toolbar = ({
   exportMenuRef,
   onExportPayroll,
   onExportDetails,
-  onExportGlobal,
 }: ToolbarProps) => {
   return (
     <section className="bg-white/90 border-b">
@@ -136,16 +134,6 @@ const Toolbar = ({
                   }}
                 >
                   🧾 Détaillé (XLSX)
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setExportOpen(false);
-                    void onExportGlobal();
-                  }}
-                >
-                  🌐 Export global par mois
                 </button>
               </div>
             )}

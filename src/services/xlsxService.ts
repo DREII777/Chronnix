@@ -315,150 +315,43 @@ interface GlobalExportParams {
   entries: TimeEntry[];
 }
 
-const asWorker = (value: Worker | Worker[] | null | undefined): Worker | null => {
-  if (!value) {
-    return null;
-  }
-  return Array.isArray(value) ? value[0] ?? null : value;
-};
+const mergeEntriesByDay = (entries: TimeEntry[]): TimeEntry[] => {
+  const map = new Map<string, TimeEntry>();
 
-const resolveWorkerDisplay = (worker: Worker | Worker[] | null | undefined): { name: string; email: string } => {
-  const normalized = asWorker(worker);
-  const name = normalized?.full_name?.trim();
-  const email = normalized?.email?.trim();
+  entries.forEach((entry) => {
+    const key = `${entry.worker_id}|${entry.work_date}`;
+    const hours = toNum(entry.hours);
+    const existing = map.get(key);
 
-  if (name) {
-    return { name, email: email || '' };
-  }
+    if (existing) {
+      existing.hours = toNum(existing.hours) + hours;
+      existing.status = existing.hours > 0 ? 'worked' : existing.status;
+    } else {
+      map.set(key, {
+        ...entry,
+        hours,
+        status: hours > 0 ? 'worked' : entry.status,
+      });
+    }
+  });
 
-  if (email) {
-    return { name: email, email };
-  }
-
-  const fallbackId = normalized?.id?.slice(0, 8) || '—';
-  return { name: fallbackId, email: '' };
-};
-
-const resolveWorkerRate = (worker: Worker | Worker[] | null | undefined): number => {
-  const normalized = asWorker(worker);
-  return toNum(normalized?.pay_rate);
-};
-
-const resolveProjectName = (project: Project | Project[] | null | undefined): string => {
-  if (!project) {
-    return '—';
-  }
-  const normalized = Array.isArray(project) ? project[0] : project;
-  return normalized?.name?.trim() || '—';
+  return Array.from(map.values());
 };
 
 export const exportGlobalMonthXlsx = async ({ yearMonth, workers, entries }: GlobalExportParams): Promise<void> => {
-  const workerMeta = new Map(
-    workers.map((worker) => [
-      worker.id,
-      {
-        rate: toNum(worker.pay_rate),
-        info: resolveWorkerDisplay(worker),
-      },
-    ]),
-  );
-
-  type Summary = {
-    hours: number;
-    days: Set<string>;
-    rate: number;
-    name: string;
-    email: string;
-  };
-
-  const byWorker = new Map<string, Summary>();
-
-  entries.forEach((entry) => {
-    const hours = toNum(entry.hours);
-    if (!hours) {
-      return;
-    }
-
-    const meta = workerMeta.get(entry.worker_id) ?? {
-      rate: resolveWorkerRate(entry.worker),
-      info: resolveWorkerDisplay(entry.worker),
-    };
-
-    const { name, email } = meta.info;
-    const rate = meta.rate;
-
-    const current = byWorker.get(entry.worker_id) ?? {
-      hours: 0,
-      days: new Set<string>(),
-      rate,
-      name,
-      email,
-    };
-
-    current.hours += hours;
-    current.days.add(entry.work_date);
-    current.rate = rate;
-    if (name) {
-      current.name = name;
-    }
-    if (email) {
-      current.email = email;
-    }
-
-    byWorker.set(entry.worker_id, current);
-  });
-
-  type SummaryRow = [string, string, number, number, number | null, number];
-
-  const summaryRows: SummaryRow[] = Array.from(byWorker.values())
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((summary) => {
-      const hoursRounded = Number(summary.hours.toFixed(2));
-      const rateRounded = Number(summary.rate.toFixed(2));
-      const totalPay = Number((summary.hours * summary.rate).toFixed(2));
-      return [
-        summary.name || '—',
-        summary.email,
-        hoursRounded,
-        summary.days.size,
-        Number.isFinite(rateRounded) ? rateRounded : null,
-        totalPay,
-      ];
-    });
-
-  const totalHoursRaw = summaryRows.reduce((sum, row) => sum + row[2], 0);
-  const totalHours = Number(totalHoursRaw.toFixed(2));
-  const totalDays = summaryRows.reduce((sum, row) => sum + row[3], 0);
-  const totalPayRaw = summaryRows.reduce((sum, row) => sum + row[5], 0);
-  const totalPay = Number(totalPayRaw.toFixed(2));
-
-  const summaryHeader: (string | number | null)[] = ['Nom', 'Email', 'Heures totales', 'Jours', 'Taux horaire', 'Total paie'];
-  const summaryTotalRow: (string | number | null)[] = ['TOTAL', '', totalHours, totalDays, null, totalPay];
-  const summarySheetRows: (string | number | null)[][] = [summaryHeader, ...summaryRows, summaryTotalRow];
-
-  const detailRows = entries
-    .slice()
-    .sort((a, b) => {
-      if (a.work_date === b.work_date) {
-        const nameA = resolveWorkerDisplay(a.worker).name;
-        const nameB = resolveWorkerDisplay(b.worker).name;
-        return nameA.localeCompare(nameB);
-      }
-      return a.work_date.localeCompare(b.work_date);
-    })
-    .map((entry) => {
-      const workerInfo = resolveWorkerDisplay(entry.worker);
-      const projectName = resolveProjectName(entry.project);
-      const hoursRounded = Number(toNum(entry.hours).toFixed(2));
-      return [entry.work_date, workerInfo.name, projectName, hoursRounded, entry.note?.trim() || ''];
-    });
-
-  const detailHeader: (string | number | null)[] = ['Date', 'Ouvrier', 'Chantier', 'Heures', 'Notes'];
-  const detailSheetRows: (string | number | null)[][] = [detailHeader, ...detailRows];
+  const mergedEntries = mergeEntriesByDay(entries);
+  const sheetRows = buildTimesheetRows(mergedEntries, workers, yearMonth);
 
   const workbook = buildTimesheetsWorkbook(
-    { sheets: [{ name: 'Résumé', rows: summarySheetRows }, { name: 'Détails', rows: detailSheetRows }] },
-    { applyPrintSetup: false },
+    {
+      sheets: [
+        {
+          name: 'Global',
+          rows: sheetRows,
+        },
+      ],
+    },
+    { applyPrintSetup: true },
   );
 
   await withBrowserDownload(workbook, `Chronnix_Global_${yearMonth}.xlsx`);

@@ -75,7 +75,6 @@ const Dashboard = ({ user }: DashboardProps) => {
         exportMenuRef={state.exportMenuRef}
         onExportPayroll={state.exportPayroll}
         onExportDetails={state.exportDetails}
-        onExportGlobal={state.exportGlobal}
       />
 
       <StatsGrid totals={state.totals} hasProject={Boolean(state.projectId)} />
