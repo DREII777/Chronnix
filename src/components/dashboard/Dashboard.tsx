@@ -16,10 +16,20 @@ interface DashboardProps {
 const Dashboard = ({ user }: DashboardProps) => {
   const state = useDashboardData(user);
   const daysInMonth = useMemo(() => monthBounds(state.yearMonth).days, [state.yearMonth]);
+  const fullName = (user.user_metadata?.full_name as string | undefined)?.trim();
+  const email = user.email?.trim();
+  const profileName = fullName || email || 'Profil utilisateur';
+  const profileEmail = email && email !== profileName ? email : null;
 
   return (
     <div className="min-h-screen">
-      <Header totals={state.globalTotals} onLogout={state.logout} />
+      <Header
+        totals={state.globalTotals}
+        onLogout={state.logout}
+        onExportGlobal={state.exportGlobal}
+        profileName={profileName}
+        profileEmail={profileEmail}
+      />
 
       {state.feedback ? (
         <div

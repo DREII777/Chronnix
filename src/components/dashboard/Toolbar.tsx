@@ -145,7 +145,7 @@ const Toolbar = ({
                     void onExportGlobal();
                   }}
                 >
-                  🌐 Export global (mois)
+                  🌐 Export global par mois
                 </button>
               </div>
             )}
