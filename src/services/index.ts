@@ -1,2 +1,2 @@
 export { supabase } from './supabaseClient';
-export { exportDetailXlsx, exportPayrollXlsx } from './xlsxService';
+export { exportDetailXlsx, exportPayrollXlsx, exportGlobalMonthXlsx } from './xlsxService';

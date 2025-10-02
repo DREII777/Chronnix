@@ -308,3 +308,139 @@ export const exportDetailXlsx = async (params: DetailExportParams): Promise<void
   )}`;
   await withBrowserDownload(workbook, `Chronnix_Timesheets_${isoDate}.xlsx`);
 };
+
+interface GlobalExportParams {
+  yearMonth: string;
+  workers: Worker[];
+  entries: TimeEntry[];
+}
+
+const resolveWorkerDisplay = (worker: Worker | null | undefined): { name: string; email: string } => {
+  const name = worker?.full_name?.trim();
+  const email = worker?.email?.trim();
+
+  if (name) {
+    return { name, email: email || '' };
+  }
+
+  if (email) {
+    return { name: email, email };
+  }
+
+  return { name: worker?.id?.slice(0, 8) || '—', email: '' };
+};
+
+export const exportGlobalMonthXlsx = async ({ yearMonth, workers, entries }: GlobalExportParams): Promise<void> => {
+  const workerMeta = new Map(
+    workers.map((worker) => [
+      worker.id,
+      {
+        rate: toNum(worker.pay_rate),
+        info: resolveWorkerDisplay(worker),
+      },
+    ]),
+  );
+
+  type Summary = {
+    hours: number;
+    days: Set<string>;
+    rate: number;
+    name: string;
+    email: string;
+  };
+
+  const byWorker = new Map<string, Summary>();
+
+  entries.forEach((entry) => {
+    const hours = toNum(entry.hours);
+    if (!hours) {
+      return;
+    }
+
+    const meta = workerMeta.get(entry.worker_id) ?? {
+      rate: toNum(entry.worker?.pay_rate),
+      info: resolveWorkerDisplay(entry.worker ?? null),
+    };
+
+    const { name, email } = meta.info;
+    const rate = meta.rate || toNum(entry.worker?.pay_rate);
+
+    const current = byWorker.get(entry.worker_id) ?? {
+      hours: 0,
+      days: new Set<string>(),
+      rate: rate || 0,
+      name,
+      email,
+    };
+
+    current.hours += hours;
+    current.days.add(entry.work_date);
+    current.rate = rate || current.rate;
+    current.name = name || current.name;
+    current.email = email ?? current.email;
+
+    byWorker.set(entry.worker_id, current);
+  });
+
+  const summaryRows = Array.from(byWorker.values())
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((summary) => {
+      const totalPay = Number((summary.hours * summary.rate).toFixed(2));
+      return [
+        summary.name || '—',
+        summary.email,
+        Number(summary.hours.toFixed(2)),
+        summary.days.size,
+        summary.rate ? Number(summary.rate.toFixed(2)) : null,
+        totalPay,
+      ] as (string | number | null);
+    });
+
+  const totalHours = Number(
+    summaryRows.reduce((sum, row) => sum + (typeof row[2] === 'number' ? row[2] : 0), 0).toFixed(2),
+  );
+  const totalDays = summaryRows.reduce((sum, row) => sum + (typeof row[3] === 'number' ? row[3] : 0), 0);
+  const totalPay = Number(
+    summaryRows.reduce((sum, row) => sum + (typeof row[5] === 'number' ? row[5] : 0), 0).toFixed(2),
+  );
+
+  const summarySheet = {
+    name: 'Résumé',
+    rows: [
+      ['Nom', 'Email', 'Heures totales', 'Jours', 'Taux horaire', 'Total paie'],
+      ...summaryRows,
+      ['TOTAL', '', totalHours, totalDays, null, totalPay],
+    ],
+  } satisfies TimesheetSheetData;
+
+  const detailRows = entries
+    .slice()
+    .sort((a, b) => {
+      if (a.work_date === b.work_date) {
+        const nameA = resolveWorkerDisplay(a.worker ?? null).name;
+        const nameB = resolveWorkerDisplay(b.worker ?? null).name;
+        return nameA.localeCompare(nameB);
+      }
+      return a.work_date.localeCompare(b.work_date);
+    })
+    .map((entry) => {
+      const workerInfo = resolveWorkerDisplay(entry.worker ?? null);
+      const projectName = entry.project?.name?.trim() || '—';
+      return [
+        entry.work_date,
+        workerInfo.name,
+        projectName,
+        Number(toNum(entry.hours).toFixed(2)),
+        entry.note?.trim() || '',
+      ] as (string | number | null);
+    });
+
+  const detailSheet = {
+    name: 'Détails',
+    rows: [['Date', 'Ouvrier', 'Chantier', 'Heures', 'Notes'], ...detailRows],
+  } satisfies TimesheetSheetData;
+
+  const workbook = buildTimesheetsWorkbook({ sheets: [summarySheet, detailSheet] }, { applyPrintSetup: false });
+
+  await withBrowserDownload(workbook, `Chronnix_Global_${yearMonth}.xlsx`);
+};

@@ -6,7 +6,7 @@ import { monthBounds, shiftYearMonth, yearMonthFromDate } from '../utils/dateUti
 import { entriesByKey } from '../utils/entriesUtils';
 import { toNum } from '../utils/numberUtils';
 import { decimalToHHMM, hhmmToDecimal, validateTimeInput } from '../utils/timeUtils';
-import { exportDetailXlsx, exportPayrollXlsx } from '../services/xlsxService';
+import { exportDetailXlsx, exportGlobalMonthXlsx, exportPayrollXlsx } from '../services/xlsxService';
 
 type Feedback = {
   type: 'success' | 'error';
@@ -96,6 +96,7 @@ export interface DashboardState {
   refreshData: () => Promise<unknown[]>;
   exportPayroll: () => Promise<void>;
   exportDetails: () => Promise<void>;
+  exportGlobal: () => Promise<void>;
   logout: () => Promise<void>;
   shiftMonth: (delta: number) => void;
   setOpenWorkers: Dispatch<SetStateAction<boolean>>;
@@ -754,6 +755,42 @@ export const useDashboardData = (user: User): DashboardState => {
     }
   }, [yearMonth, projectId, projects, workers, entries, allEntries, notify]);
 
+  const exportGlobal = useCallback(async () => {
+    try {
+      const [{ data: workerData, error: workersError }, { data: entryData, error: entriesError }] = await Promise.all([
+        supabase
+          .from('workers')
+          .select('*')
+          .eq('owner', user.id)
+          .eq('archived', false),
+        supabase
+          .from('time_entries')
+          .select('*, worker:workers(*), project:projects(*)')
+          .eq('owner', user.id)
+          .gte('work_date', from)
+          .lte('work_date', to),
+      ]);
+
+      if (workersError) {
+        throw workersError;
+      }
+      if (entriesError) {
+        throw entriesError;
+      }
+
+      await exportGlobalMonthXlsx({
+        yearMonth,
+        workers: workerData ?? [],
+        entries: entryData ?? [],
+      });
+
+      notify('success', 'Export global généré.');
+    } catch (error) {
+      console.error('Global export failed', error);
+      notify('error', "L'export global a échoué. Veuillez réessayer.");
+    }
+  }, [yearMonth, user.id, from, to, notify]);
+
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
   }, []);
@@ -818,6 +855,7 @@ export const useDashboardData = (user: User): DashboardState => {
     refreshData,
     exportPayroll,
     exportDetails,
+    exportGlobal,
     logout,
     shiftMonth,
     setOpenWorkers,
